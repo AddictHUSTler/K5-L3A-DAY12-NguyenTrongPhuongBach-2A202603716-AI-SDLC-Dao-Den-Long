@@ -33,7 +33,7 @@ function build(L) {
   if (L.tower) world.add(mesh(new THREE.CylinderGeometry(L.tower.r, L.tower.r, L.tower.h, 16), M(C.wood)).translateY(L.tower.y + L.tower.h / 2));
   L.pads.forEach(p => world.add(mesh(new THREE.CylinderGeometry(p.r, p.r, .15, 24), M(C.gold, {emissive:C.gold, emissiveIntensity:.5})).translateX(p.pos[0]).translateZ(p.pos[2]).translateY(p.pos[1] + .08)));
 }
-const pools = {m:{}, s:{}, l:{}, d:{}, c:{}};
+const pools = {l:{}, d:{}, c:{}};
 function sync(pool, items, make, dy = 0) {
   const ids = new Set(items.map(i => i.id));
   for (const id in pool) if (!ids.has(id)) { scene.remove(pool[id]); delete pool[id]; }
@@ -41,9 +41,15 @@ function sync(pool, items, make, dy = 0) {
 }
 const moteGeo = new THREE.SphereGeometry(.22,8,8), haloGeo = new THREE.SphereGeometry(.5,8,8), shadeGeo = new THREE.SphereGeometry(.9,12,12);
 const moteMat = new THREE.MeshBasicMaterial({color:C.mote}), haloMat = new THREE.MeshBasicMaterial({color:C.halo, transparent:true, opacity:.25});   // shared: no per-mote materials
-const mkMote = () => { const g = new THREE.Group(); g.add(mesh(moteGeo, moteMat)); g.add(mesh(haloGeo, haloMat)); return g; };
+// Motes and Shades are instanced: a few draw calls instead of one or two per entity
+const dummy = new THREE.Object3D(), inst = (geo, mat) => { const m = new THREE.InstancedMesh(geo, mat, 256); m.count = 0; m.frustumCulled = false; scene.add(m); return m; };
+function place(im, list, dy, scale = () => 1) {
+  const n = Math.min(list.length, 256);
+  for (let i = 0; i < n; i++) { const it = list[i]; dummy.position.set(it.pos[0], it.pos[1] + dy, it.pos[2]); dummy.scale.setScalar(scale(it)); dummy.updateMatrix(); im.setMatrixAt(i, dummy.matrix); }
+  im.count = n; im.instanceMatrix.needsUpdate = true;
+}
 const shadeMat = M(C.shade, {emissive:cfg.cb ? 0x00B3FF : C.rim, emissiveIntensity:.5}), stunMat = M(C.stun);   // shared by all Shades
-const mkShade = () => mesh(shadeGeo, shadeMat);
+const moteIM = inst(moteGeo, moteMat), haloIM = inst(haloGeo, haloMat), shadeIM = inst(shadeGeo, shadeMat), stunIM = inst(shadeGeo, stunMat);
 const mkLamp = () => { const g = new THREE.Group(); g.add(mesh(new THREE.CylinderGeometry(.2,.2,3,8), M(C.wood)).translateY(1.5));
   const b = mesh(new THREE.SphereGeometry(.7,12,12), M(C.off)); b.position.y = 3.2; b.name = "bulb"; g.add(b); const pl = new THREE.PointLight(C.lamp, 0, 30); pl.position.y = 3.2; pl.name = "pl"; g.add(pl);
   const tear = mesh(new THREE.BoxGeometry(.5, .08, .1), M(0x222222)); tear.position.set(0, 3.3, .66); tear.rotation.z = .5; tear.name = "tear"; g.add(tear);   // paper tear on a dark lantern
@@ -120,8 +126,8 @@ function draw(s) {
   snap = s; const p = s.player;
   player.position.set(...p.pos); player.rotation.y = Math.atan2(p.facing[0], p.facing[1]);
   player.children[0].material.color.set(p.invuln && !cfg.rm && (s.tick >> 2) % 2 ? 0xffffff : C.shirt);
-  sync(pools.m, s.motes, mkMote, .8); sync(pools.s, s.shades, mkShade, .9); sync(pools.l, s.lanterns, mkLamp); sync(pools.d, s.drifters, mkDrifter); sync(pools.c, s.charms.filter(c => c.available), mkCharm, .8);
-  s.shades.forEach(h => { const m = pools.s[h.id]; m.material = h.state === "stunned" ? stunMat : shadeMat; m.scale.setScalar(h.state === "spawning" ? .4 : 1); });
+  place(moteIM, s.motes, .8); place(haloIM, s.motes, .8); sync(pools.l, s.lanterns, mkLamp); sync(pools.d, s.drifters, mkDrifter); sync(pools.c, s.charms.filter(c => c.available), mkCharm, .8);
+  place(shadeIM, s.shades.filter(h => h.state !== "stunned"), .9, h => h.state === "spawning" ? .4 : 1); place(stunIM, s.shades.filter(h => h.state === "stunned"), .9);
   const blink = cfg.rm || (performance.now() % 1000) < 500;   // low fuel: 1 Hz flicker
   s.lanterns.forEach(l => { const g = pools.l[l.id], b = g.getObjectByName("bulb"), low = l.lit && l.fuel < 30, on = l.lit && !(low && !blink);
     b.material.color.set(on ? C.core : C.off); b.material.emissive.set(on ? C.lamp : 0); b.scale.set(1, l.lit ? 1 : .8, 1);
