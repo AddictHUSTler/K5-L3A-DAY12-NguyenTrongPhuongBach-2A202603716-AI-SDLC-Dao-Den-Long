@@ -7,14 +7,14 @@ WEB = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 
 sim = Sim(random.randrange(1 << 30))
 
 
-EASY_S = {1: 150, 2: 170, 3: 190}   # browser-only assist: shorter night, 5 flames, weaker drain. Headless/contract numbers are untouched.
+EASY_S = {1: 150, 2: 170, 3: 190}   # browser-only assist: shorter night, 5 flames, weaker drain, faster motes, later first Shade. Headless/contract numbers are untouched.
 
 
 def new(night, easy=False):
     night = night if night in (1, 2, 3) else 1
     if not easy:
         return Sim(random.randrange(1 << 30), night=night)
-    T = dict(load_tuning(), flames=5, drain_per_s=2)
+    T = dict(load_tuning(), flames=5, drain_per_s=2, mote_spawn_every_ticks=120, shade_first_tick=900)
     return Sim(random.randrange(1 << 30), {"time_left_s": EASY_S[night]}, tuning=T, night=night)
 
 

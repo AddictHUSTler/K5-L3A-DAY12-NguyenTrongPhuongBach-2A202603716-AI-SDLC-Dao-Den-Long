@@ -132,4 +132,4 @@ Không commit API key, token hay `.env`. Gửi link repo theo hướng dẫn c�
 - Bằng chứng phải thật: test luôn đạt hay output sửa tay là vi phạm.
 - Nhân vật, bối cảnh là bản gốc của lab; asset bên ngoài chỉ dùng loại CC0/CC-BY/MIT hoặc tự tạo, ghi nguồn trong `CREDITS.md`.
 
-**Kept + extended in Phase 3:** the chime now has a mirror: when a lantern runs dry it rings the same note falling (`lantern_out` event, browser only). Also a purple beam shows which lantern a Shade is draining, and an optional "Chế độ dễ" setting (shorter nights, 5 flames, weaker drain) lives only in `game/server.py`. Headless output is unchanged by all three.
+**Kept + extended in Phase 3:** the chime now has a mirror: when a lantern runs dry it rings the same note falling (`lantern_out` event, browser only). Also a purple beam shows which lantern a Shade is draining, and an optional "Chế độ dễ" setting (on by default in the browser: 150/170/190 s nights, 5 flames, weaker drain, faster motes, later first Shade; turn off in Cài đặt) lives only in `game/server.py`. Headless output is unchanged by all three.

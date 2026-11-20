@@ -1,5 +1,5 @@
 // Settings (saved in localStorage) and synthesized audio. Client only: never touches the sim.
-export const cfg = {vol:.6, sens:.5, easy:false, cb:false};
+export const cfg = {vol:.6, sens:.5, easy:true, cb:false};
 try { Object.assign(cfg, JSON.parse(localStorage.getItem("ddl") || "{}")); } catch(e) {}
 export const save = () => { try { localStorage.setItem("ddl", JSON.stringify(cfg)); } catch(e) {} };
 // ---- audio (WebAudio synth; client only)
