@@ -191,6 +191,7 @@ function loop(now) {
   }
   if (mode === "bench" || mode === "done") benchFrame(now);
   R.render(scene, cam);
+  if (B) R.getContext().finish();   // bench: wait for the GPU so uncapped frames do not pile up in its queue and stall
   if (B && B.first === undefined) B.first = Date.now();   // first rendered frame of the bench scene
   requestAnimationFrame(loop);
 }

@@ -77,7 +77,7 @@ def main(argv=None):
     httpd = ThreadingHTTPServer(("127.0.0.1", 0), server.H)
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
     url = f"http://127.0.0.1:{httpd.server_port}/?bench=1"
-    with tempfile.TemporaryDirectory() as prof:
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as prof:
         # --disable-gpu-vsync + --disable-frame-rate-limit: uncapped frames; fixed 1280x720 window, not fullscreen
         proc = subprocess.Popen([browser, f"--user-data-dir={prof}", "--no-first-run", "--no-default-browser-check", "--window-size=1280,720",
                                  "--window-position=0,0", "--disable-gpu-vsync", "--disable-frame-rate-limit", f"--app={url}"],
