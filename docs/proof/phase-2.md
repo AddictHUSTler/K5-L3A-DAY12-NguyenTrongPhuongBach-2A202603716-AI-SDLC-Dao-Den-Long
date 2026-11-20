@@ -18,7 +18,7 @@ Reproduce at tag `phase-2`: `./scripts/test.sh` (30 tests, all pass). Machine: x
 | Determinism, bad input -> exit 2 | `test_deterministic` (all 3 nights), `test_bad_inputs_exit_2` | pass |
 | Full night headless <= 30 s | measured 0.29 s / 0.41 s / 0.37 s for nights 1/2/3 (21,600 ticks) | pass |
 | Phase 1 regression | Phase 1 tests kept and updated to v1.1 numbers (see `assumptions.md`); none removed | pass |
-| Night 1 in the browser (play, HUD, controls) | played by hand by the author: works | pass (manual) |
-| Menu/night chain, nights 2-3 in browser, settings, audio, palette | `web/main.js` written to the ticket | **not verified**: only night 1 was played by hand |
+| Browser play: night 1, night 2 (full), night 3 (partly) | played by hand by the author, no problems reported | pass (manual) |
+| Menu chain, settings, audio, palette, rest of night 3 | `web/main.js` written to the ticket | **not verified** individually |
 | >= 30 FPS at 1280x720 | not measured | **not achieved / unmeasured** |
 | Instructor hidden scenarios | cannot run them | unverified |
