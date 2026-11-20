@@ -40,8 +40,10 @@ function sync(pool, items, make, dy = 0) {
   for (const it of items) { if (!pool[it.id]) { pool[it.id] = make(it); scene.add(pool[it.id]); } pool[it.id].position.set(it.pos[0], it.pos[1] + dy, it.pos[2]); }
 }
 const moteGeo = new THREE.SphereGeometry(.22,8,8), haloGeo = new THREE.SphereGeometry(.5,8,8), shadeGeo = new THREE.SphereGeometry(.9,12,12);
-const mkMote = () => { const g = new THREE.Group(); g.add(mesh(moteGeo, new THREE.MeshBasicMaterial({color:C.mote}))); g.add(mesh(haloGeo, new THREE.MeshBasicMaterial({color:C.halo, transparent:true, opacity:.25}))); return g; };
-const mkShade = () => mesh(shadeGeo, M(C.shade, {emissive:cfg.cb ? 0x00B3FF : C.rim, emissiveIntensity:.5}));
+const moteMat = new THREE.MeshBasicMaterial({color:C.mote}), haloMat = new THREE.MeshBasicMaterial({color:C.halo, transparent:true, opacity:.25});   // shared: no per-mote materials
+const mkMote = () => { const g = new THREE.Group(); g.add(mesh(moteGeo, moteMat)); g.add(mesh(haloGeo, haloMat)); return g; };
+const shadeMat = M(C.shade, {emissive:cfg.cb ? 0x00B3FF : C.rim, emissiveIntensity:.5}), stunMat = M(C.stun);   // shared by all Shades
+const mkShade = () => mesh(shadeGeo, shadeMat);
 const mkLamp = () => { const g = new THREE.Group(); g.add(mesh(new THREE.CylinderGeometry(.2,.2,3,8), M(C.wood)).translateY(1.5));
   const b = mesh(new THREE.SphereGeometry(.7,12,12), M(C.off)); b.position.y = 3.2; b.name = "bulb"; g.add(b); const pl = new THREE.PointLight(C.lamp, 0, 30); pl.position.y = 3.2; pl.name = "pl"; g.add(pl);
   const tear = mesh(new THREE.BoxGeometry(.5, .08, .1), M(0x222222)); tear.position.set(0, 3.3, .66); tear.rotation.z = .5; tear.name = "tear"; g.add(tear);   // paper tear on a dark lantern
@@ -51,6 +53,7 @@ const mkCharm = () => { const g = new THREE.Group(); g.add(mesh(new THREE.BoxGeo
 // ---- state
 const $ = id => document.getElementById(id);
 const keys = {}; let yaw = 0, last = performance.now(), mode = "menu", night = 1, total = 0, snap = null, busy = false, jumpPrev = false, lastSec = 99, flash = 0;
+const shown = {}, put = (id, html) => { if (shown[id] !== html) { shown[id] = html; $(id).innerHTML = html; } };   // skip identical DOM writes
 const post = (p, b) => fetch(p, {method:"POST", body:JSON.stringify(b)}).then(r => r.json());
 async function send(inputs, steps) { const r = await post("/step", {inputs, steps}); r.events.forEach(e => handle(e)); draw(r.snap); return r.snap; }
 function handle(e) {
@@ -118,13 +121,13 @@ function draw(s) {
   player.position.set(...p.pos); player.rotation.y = Math.atan2(p.facing[0], p.facing[1]);
   player.children[0].material.color.set(p.invuln && !cfg.rm && (s.tick >> 2) % 2 ? 0xffffff : C.shirt);
   sync(pools.m, s.motes, mkMote, .8); sync(pools.s, s.shades, mkShade, .9); sync(pools.l, s.lanterns, mkLamp); sync(pools.d, s.drifters, mkDrifter); sync(pools.c, s.charms.filter(c => c.available), mkCharm, .8);
-  s.shades.forEach(h => { const m = pools.s[h.id]; m.material.color.set(h.state === "stunned" ? C.stun : C.shade); m.material.emissiveIntensity = h.state === "stunned" ? 0 : .5; m.scale.setScalar(h.state === "spawning" ? .4 : 1); });
+  s.shades.forEach(h => { const m = pools.s[h.id]; m.material = h.state === "stunned" ? stunMat : shadeMat; m.scale.setScalar(h.state === "spawning" ? .4 : 1); });
   const blink = cfg.rm || (performance.now() % 1000) < 500;   // low fuel: 1 Hz flicker
   s.lanterns.forEach(l => { const g = pools.l[l.id], b = g.getObjectByName("bulb"), low = l.lit && l.fuel < 30, on = l.lit && !(low && !blink);
     b.material.color.set(on ? C.core : C.off); b.material.emissive.set(on ? C.lamp : 0); b.scale.set(1, l.lit ? 1 : .8, 1);
     g.getObjectByName("pl").intensity = on ? 200 * (.4 + .6 * l.fuel / 100) : 0; g.getObjectByName("tear").visible = !l.lit;
     const fb = g.getObjectByName("fuel"); fb.visible = l.lit && !(low && !blink); fb.scale.x = Math.max(.01, l.fuel / 100); fb.material.color.set(low ? new THREE.Color(warnCol()) : C.halo); });
-  s.shades.forEach(h => { const m = pools.s[h.id]; m.material.emissive.set(cfg.cb ? 0x00B3FF : C.rim); });
+  shadeMat.emissive.set(cfg.cb ? 0x00B3FF : C.rim);
   for (const id in beams) if (!s.shades.some(h => h.id === id && h.state === "drain")) { scene.remove(beams[id]); delete beams[id]; }
   s.shades.filter(h => h.state === "drain").forEach(h => { const l = s.lanterns.find(q => q.id === h.target_lantern_id); if (!l) return;
     const pts = [new THREE.Vector3(...h.pos).setY(h.pos[1] + .9), new THREE.Vector3(...l.pos).setY(l.pos[1] + 3.2)];
@@ -132,15 +135,15 @@ function draw(s) {
     beams[h.id].geometry.setFromPoints(pts); });
   const lit = s.lanterns.filter(l => l.lit).length, n = s.lanterns.length, need = Math.ceil(.6 * n - 1e-9);
   amb.intensity = .15 + .55 * (lit / n);
-  $("flames").textContent = "🔥".repeat(Math.max(0, p.flames));
+  put("flames", "🔥".repeat(Math.max(0, p.flames)));
   const t = Math.ceil(s.time_left_s); $("clock").textContent = `${String(Math.floor(t/60)).padStart(2,"0")}:${String(t%60).padStart(2,"0")}`; $("clock").className = s.time_left_s <= 30 ? "low" : "";
   if (t <= 10 && t < lastSec && s.state === "playing") SFX.tick(); lastSec = t;
-  $("score").innerHTML = `<span class="${lit < need ? "warn" : ""}">${lit < need ? "⚠ " : ""}Đèn ${lit}/${n} (cần ${need})</span><br>Điểm ${s.score}`;
-  $("bar").innerHTML = `<span>${p.carried}/${p.capacity}</span>` + Array.from({length:p.capacity}, (_, i) => `<i class="${i < p.carried ? "on" : ""}"></i>`).join("");
-  $("cds").innerHTML = `<b class="${p.dash_cd_s > 0 ? "cd" : ""}">${keyName(cfg.keys.dash)} · Lướt${p.dash_cd_s > 0 ? " " + p.dash_cd_s.toFixed(1) : ""}</b><b class="${p.pulse_cd_s > 0 || p.carried < 3 ? "cd" : ""}">${keyName(cfg.keys.pulse)} · Tỏa Sáng ${p.pulse_cd_s > 0 ? p.pulse_cd_s.toFixed(1) : "(3)"}</b>`;
+  put("score", `<span class="${lit < need ? "warn" : ""}">${lit < need ? "⚠ " : ""}Đèn ${lit}/${n} (cần ${need})</span><br>Điểm ${s.score}`);
+  put("bar", `<span>${p.carried}/${p.capacity}</span>` + Array.from({length:p.capacity}, (_, i) => `<i class="${i < p.carried ? "on" : ""}"></i>`).join(""));
+  put("cds", `<b class="${p.dash_cd_s > 0 ? "cd" : ""}">${keyName(cfg.keys.dash)} · Lướt${p.dash_cd_s > 0 ? " " + p.dash_cd_s.toFixed(1) : ""}</b><b class="${p.pulse_cd_s > 0 || p.carried < 3 ? "cd" : ""}">${keyName(cfg.keys.pulse)} · Tỏa Sáng ${p.pulse_cd_s > 0 ? p.pulse_cd_s.toFixed(1) : "(3)"}</b>`);
   const near = s.lanterns.filter(l => !l.lit || l.fuel < 100).map(l => ({l, d: Math.hypot(l.pos[0]-p.pos[0], l.pos[2]-p.pos[2])})).sort((a, b) => a.d - b.d)[0];
   $("prompt").textContent = near && near.d <= 2 ? (near.l.lit ? `${keyName(cfg.keys.interact)} — Châm dầu (${near.l.fuel.toFixed(0)}/100)` : `${keyName(cfg.keys.interact)} — Nạp ánh sáng (${near.l.deposited}/${near.l.ever_lit ? 5 : 10})`) : "";
-  const weak = s.lanterns.filter(l => l.lit && l.fuel < 30).length; $("fuel").innerHTML = weak ? `<span class="warn">⚠ ${weak} đèn sắp cạn dầu</span>` : "";
+  const weak = s.lanterns.filter(l => l.lit && l.fuel < 30).length; put("fuel", weak ? `<span class="warn">⚠ ${weak} đèn sắp cạn dầu</span>` : "");
   $("note").textContent = s.wind.warning ? "🍃 Gió sắp nổi!" : s.wind.active ? "🍃 Gió mạnh" : p.charm_s > 0 ? `Bùa Gió ${Math.ceil(p.charm_s)}s` : "";
   edgeArrow($("arrow"), near && new THREE.Vector3(...near.l.pos).setY(near.l.pos[1] + 3));
   const cueShade = performance.now() < cue.until && s.shades.find(h => h.id === cue.id);
