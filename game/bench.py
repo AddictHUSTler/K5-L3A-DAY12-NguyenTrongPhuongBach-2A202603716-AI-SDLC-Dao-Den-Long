@@ -6,7 +6,7 @@ from http.server import ThreadingHTTPServer
 from . import server
 from .sim import load_tuning, mulberry32
 
-BROWSERS = ("google-chrome", "google-chrome-stable", "chromium", "chromium-browser", "chrome", "brave-browser", "microsoft-edge")
+BROWSERS = ("google-chrome", "google-chrome-stable", "chromium", "chromium-browser", "chrome", "brave-browser", "brave-origin-stable", "brave-origin", "microsoft-edge")
 WARMUP_S = 3
 MAC = ("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome", "/Applications/Chromium.app/Contents/MacOS/Chromium")
 
