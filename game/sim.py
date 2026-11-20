@@ -1,12 +1,13 @@
 """Pure game logic for Đảo Đèn Lồng, Test Contract v1.1. No I/O, no rendering, no wall-clock.
 Deterministic per seed. All numbers and maps come from game.contract.json."""
 import json, math, os
-from .world import Terrain, ring_points
+from .world import Terrain, ring_points, unit
 
 DT = 1.0 / 60.0
 CONTRACT_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "game.contract.json")
 SHADE_STATES = ("spawning", "wander", "chase", "recoil", "stunned")
 DRIFTER_STATES = ("idle", "chase", "flee")
+BUTTONS = ("jump", "interact", "pulse", "dash", "pause")
 
 
 class ScenarioError(ValueError):
@@ -57,80 +58,86 @@ class Sim:
         self.T = tuning or con["tuning"]
         if night not in (1, 2, 3):
             raise ScenarioError("night must be 1, 2 or 3")
-        self.night, self.M = night, con["maps"][str(night)]
-        self.rnd = mulberry32(seed)
-        self.terrain = Terrain(self.M, self.T["step_up_m"])
         sc = scenario or {}
         if not isinstance(sc, dict):
             raise ScenarioError("scenario must be an object")
-        T, M = self.T, self.M
-        self.tick = self.sim_tick = 0
-        self.state, self.paused, self.started = "playing", False, False
-        self.score = 0
-        self.base_ticks = ticks(float(sc.get("time_left_s", T[M["duration_key"]])))
-        self.mote_pts, self.shade_pts = ring_points(M["mote_rings"]), ring_points(M["shade_rings"])
-        # player
-        p = sc.get("player", {})
-        self.start = list(map(float, M["start"]))
-        self.pos = vec(p["pos"], "player.pos") if "pos" in p else list(self.start)
-        self.vx = self.vz = self.vy = 0.0
-        if "vel" in p:
-            self.vx, self.vy, self.vz = vec(p["vel"], "player.vel")
-        h = self.terrain.height(self.pos[0], self.pos[2])
-        self.grounded = h is not None and abs(self.pos[1] - h) < 1e-6
-        self.face = (0.0, 1.0)
-        self.flames = int(p.get("flames", T["flames"]))
-        self.carried = int(p.get("carried", 0))
-        self.invuln = int(p.get("invuln_ticks", 0))
-        self.dash_cd = int(p.get("dash_cd_ticks", 0))
-        self.pulse_cd = int(p.get("pulse_cd_ticks", 0))
-        self.charm = int(p.get("charm_ticks", 0))
-        self.dash_left, self.dash_dir = 0, (0.0, 1.0)
-        self.launched, self.launch_v = False, (0.0, 0.0)
-        self.fall_wait = 0
-        # lanterns
-        self.lanterns = [{"id": f"L{i+1}", "pos": list(map(float, q)), "lit": False, "deposited": 0} for i, q in enumerate(M["lanterns"])]
-        for u in sc.get("lanterns", []):
-            self._apply_lantern(u)
-        # motes
-        self.motes, self.shades, self.mote_n, self.shade_n, self.drifter_n = [], [], 0, 0, 0
+        self.night, self.M = night, con["maps"][str(night)]
+        self.rnd = mulberry32(seed)
+        self.terrain = Terrain(self.M, self.T["step_up_m"])
+        self.mote_pts, self.shade_pts = ring_points(self.M["mote_rings"]), ring_points(self.M["shade_rings"])
+        self.tick = self.sim_tick = 0                       # tick counts while paused, sim_tick does not
+        self.state, self.paused, self.started, self.score = "playing", False, False, 0
+        self.base_ticks = ticks(float(sc.get("time_left_s", self.T[self.M["duration_key"]])))
         self.random_motes = sc.get("random_motes", True)
         self.random_shades = sc.get("random_shades", True)
         self.random_drifters = sc.get("random_drifters", night >= 2)
-        self.wind_on = sc.get("wind_enabled", bool(M.get("wind")))
-        if "motes" in sc:
+        self.wind_on = sc.get("wind_enabled", bool(self.M.get("wind")))
+        self.wind = {"active": False, "warn": False, "dir": 0.0, "next": ticks(self.T["wind_every_s"]), "end": 0}
+        self.in_ = {"move": [0.0, 0.0], "cam_yaw_deg": 0.0, **{k: False for k in BUTTONS}}
+        self.prev = {k: False for k in BUTTONS}
+        self._init_player(sc.get("player", {}))
+        self._init_lanterns(sc.get("lanterns", []))
+        self.motes, self.mote_n, self.shades, self.shade_n, self.drifters, self.drifter_n = [], 0, [], 0, [], 0
+        self._init_motes(sc)
+        self._init_mobs(sc)
+        self._init_charms(sc)
+
+    def _init_player(self, p):
+        T = self.T
+        self.start = list(map(float, self.M["start"]))
+        self.pos = vec(p["pos"], "player.pos") if "pos" in p else list(self.start)
+        self.vx, self.vy, self.vz = vec(p["vel"], "player.vel") if "vel" in p else (0.0, 0.0, 0.0)
+        h = self.terrain.height(self.pos[0], self.pos[2])
+        self.grounded = h is not None and abs(self.pos[1] - h) < 1e-6
+        self.face = (0.0, 1.0)
+        self.flames, self.carried = int(p.get("flames", T["flames"])), int(p.get("carried", 0))
+        self.invuln, self.dash_cd = int(p.get("invuln_ticks", 0)), int(p.get("dash_cd_ticks", 0))
+        self.pulse_cd, self.charm = int(p.get("pulse_cd_ticks", 0)), int(p.get("charm_ticks", 0))
+        self.dash_left, self.dash_dir = 0, (0.0, 1.0)
+        self.launched, self.launch_v = False, (0.0, 0.0)    # launched = flying from a pad; keys do not steer
+        self.fall_wait = 0                                  # ticks left frozen after falling off the island
+
+    def _init_lanterns(self, updates):
+        self.lanterns = [{"id": f"L{i+1}", "pos": list(map(float, q)), "lit": False, "deposited": 0} for i, q in enumerate(self.M["lanterns"])]
+        for u in updates:
+            self._apply_lantern(u)
+
+    def _init_motes(self, sc):
+        if "motes" in sc:   # scenario list replaces the defaults; entries are [x,y,z] or {pos, kind, ttl_ticks}
             for m in sc["motes"]:
                 if isinstance(m, dict):
                     self._add_mote(vec(m.get("pos"), "motes[].pos"), m.get("kind", "random"), m.get("ttl_ticks"), None)
                 else:
                     self._add_mote(vec(m, "motes[]"), "random", None, None)
         elif self.random_motes:
-            idx = list(range(len(self.mote_pts)))
-            for _ in range(T["mote_initial"]):
-                i = idx.pop(int(self.rnd() * len(idx)))
+            free = list(range(len(self.mote_pts)))
+            for _ in range(self.T["mote_initial"]):
+                i = free.pop(int(self.rnd() * len(free)))
                 self._add_mote(list(self.mote_pts[i]), "random", None, i)
-        # shades
+
+    def _init_mobs(self, sc):
+        T = self.T
         for s in sc.get("shades", []):
             st = s.get("state", "chase")
             if st not in SHADE_STATES:
                 raise ScenarioError(f"bad shade state {st}")
             sh = self._new_shade(s.get("id"), vec(s.get("pos"), "shades[].pos"), st)
-            sh["left"] = int(s.get("state_ticks_left", T["pulse_stun_ticks"] if st == "stunned" else T["recoil_ticks"] if st == "recoil" else 0))
+            default_left = {"stunned": T["pulse_stun_ticks"], "recoil": T["recoil_ticks"]}.get(st, 0)
+            sh["left"] = int(s.get("state_ticks_left", default_left))
             self.shades.append(sh)
-        # drifters, charms
-        self.drifters = []
         for d in sc.get("drifters", []):
             st = d.get("state", "idle")
             if st not in DRIFTER_STATES:
                 raise ScenarioError(f"bad drifter state {st}")
-            self.drifters.append(self._new_drifter(d.get("id"), vec(d.get("pos"), "drifters[].pos"), st, int(d.get("stolen", 0)), int(d.get("state_ticks_left", T["drifter_flee_ticks"]))))
+            self.drifters.append(self._new_drifter(d.get("id"), vec(d.get("pos"), "drifters[].pos"), st,
+                                                   int(d.get("stolen", 0)), int(d.get("state_ticks_left", T["drifter_flee_ticks"]))))
+
+    def _init_charms(self, sc):
         if "charms" in sc:
-            self.charms = [{"id": c.get("id") or f"C{i+1}", "pos": vec(c.get("pos"), "charms[].pos"), "available": bool(c.get("available", True)), "respawn": int(c.get("respawn_ticks", 0))} for i, c in enumerate(sc["charms"])]
+            self.charms = [{"id": c.get("id") or f"C{i+1}", "pos": vec(c.get("pos"), "charms[].pos"),
+                            "available": bool(c.get("available", True)), "respawn": int(c.get("respawn_ticks", 0))} for i, c in enumerate(sc["charms"])]
         else:
-            self.charms = [{"id": f"C{i+1}", "pos": list(map(float, q)), "available": True, "respawn": 0} for i, q in enumerate(M["charms"])]
-        self.wind = {"active": False, "warn": False, "dir": 0.0, "next": ticks(T["wind_every_s"]), "end": 0}
-        self.in_ = {"move": [0.0, 0.0], "cam_yaw_deg": 0.0, "jump": False, "interact": False, "pulse": False, "dash": False, "pause": False}
-        self.prev = {k: False for k in ("jump", "interact", "pulse", "dash", "pause")}
+            self.charms = [{"id": f"C{i+1}", "pos": list(map(float, q)), "available": True, "respawn": 0} for i, q in enumerate(self.M["charms"])]
 
     def layout(self):
         return json.loads(json.dumps(self.M))
@@ -190,7 +197,7 @@ class Sim:
                 if not num(v):
                     raise ScenarioError("cam_yaw_deg must be a number")
                 self.in_["cam_yaw_deg"] = float(v)
-            elif k in self.prev:
+            elif k in BUTTONS:
                 if not isinstance(v, bool):
                     raise ScenarioError(f"{k} must be boolean")
                 self.in_[k] = v
@@ -219,28 +226,7 @@ class Sim:
             self.started = True
             ev("night_start", {"night": self.night})
         # 2. counters
-        self.invuln = max(0, self.invuln - 1)
-        self.dash_cd = max(0, self.dash_cd - 1)
-        self.pulse_cd = max(0, self.pulse_cd - 1)
-        self.charm = max(0, self.charm - 1)
-        respawn = False
-        if self.fall_wait > 0:
-            self.fall_wait -= 1
-            respawn = self.fall_wait == 0 and self.flames > 0
-        for m in self.motes:
-            if m["ttl"] is not None:
-                m["ttl"] -= 1
-        self.motes = [m for m in self.motes if m["ttl"] is None or m["ttl"] > 0]
-        for c in self.charms:
-            if not c["available"]:
-                c["respawn"] -= 1
-                if c["respawn"] <= 0:
-                    c["available"], c["respawn"] = True, 0
-        for s in self.shades:
-            if s["state"] == "stunned":
-                s["left"] -= 1
-                if s["left"] <= 0:
-                    s["state"], s["left"], s["push"] = "chase", 0, 0
+        respawn = self._tick_counters()
         # 3. move player
         if respawn:
             self.pos, self.vx, self.vy, self.vz = list(self.start), 0.0, 0.0, 0.0
@@ -275,8 +261,42 @@ class Sim:
             self._end(ev, "lost", "dawn")
         return evs
 
-    # ---- stage 3
+    def _tick_counters(self):
+        """Stage 2. Returns True when the post-fall wait just ended and the player should respawn."""
+        self.invuln, self.dash_cd = max(0, self.invuln - 1), max(0, self.dash_cd - 1)
+        self.pulse_cd, self.charm = max(0, self.pulse_cd - 1), max(0, self.charm - 1)
+        respawn = False
+        if self.fall_wait > 0:
+            self.fall_wait -= 1
+            respawn = self.fall_wait == 0 and self.flames > 0
+        for m in self.motes:
+            if m["ttl"] is not None:
+                m["ttl"] -= 1
+        self.motes = [m for m in self.motes if m["ttl"] is None or m["ttl"] > 0]
+        for c in self.charms:
+            if not c["available"]:
+                c["respawn"] -= 1
+                if c["respawn"] <= 0:
+                    c["available"], c["respawn"] = True, 0
+        for s in self.shades:
+            if s["state"] == "stunned":
+                s["left"] -= 1
+                if s["left"] <= 0:
+                    s["state"], s["left"], s["push"] = "chase", 0, 0
+        return respawn
+
+    # ---- stage 3: move the player
     def _move_player(self, ev, edge):
+        dashing = self._steer(ev, edge)
+        self._walk()
+        self._use_pads()
+        self._blow_wind()
+        if not dashing:
+            self._vertical()
+        self._check_fall(ev)
+
+    def _steer(self, ev, edge):
+        """Set horizontal velocity from keys, dash or pad launch; handle jump/dash presses. Returns True while dashing."""
         T = self.T
         mx, mz = self.in_["move"]
         n = math.hypot(mx, mz)
@@ -285,7 +305,6 @@ class Sim:
         th = math.radians(self.in_["cam_yaw_deg"])
         wx, wz = mx * math.cos(th) + mz * math.sin(th), -mx * math.sin(th) + mz * math.cos(th)
         speed = T["charm_speed"] if self.charm > 0 else T["player_speed"]
-        tvx, tvz = wx * speed, wz * speed
         if n > 1e-9:
             self.face = (wx / n, wz / n)
         if edge["jump"] and self.grounded:
@@ -295,18 +314,20 @@ class Sim:
             self.dash_left = ticks(T["dash_duration_s"])
             self.dash_cd = 0 if self.charm > 0 else ticks(T["dash_cooldown_s"])
             ev("dash", {})
-        dashing = self.dash_left > 0
-        if dashing:
+        if self.dash_left > 0:
             self.vx, self.vz, self.vy = self.dash_dir[0] * T["dash_speed"], self.dash_dir[1] * T["dash_speed"], 0.0
             self.dash_left -= 1
-        elif self.launched:
+            return True
+        if self.launched:
             self.vx, self.vz = self.launch_v
-        else:
+        else:   # reach the target velocity within accel_s
             a = speed * DT / T["accel_s"]
-            for attr, t in (("vx", tvx), ("vz", tvz)):
-                v = getattr(self, attr)
-                setattr(self, attr, v + max(-a, min(a, t - v)))
-        # horizontal with wall / tower blocking
+            self.vx += max(-a, min(a, wx * speed - self.vx))
+            self.vz += max(-a, min(a, wz * speed - self.vz))
+        return False
+
+    def _walk(self):
+        """Apply horizontal velocity; walls and the tower block it (slide along one axis if possible)."""
         x, y, z = self.pos
         nx, nz = x + self.vx * DT, z + self.vz * DT
         if not self.terrain.walk_ok(nx, nz, y):
@@ -317,48 +338,54 @@ class Sim:
             else:
                 nx, nz, self.vx, self.vz = x, z, 0.0, 0.0
         self.pos[0], self.pos[2] = nx, nz
-        # pads
-        if not self.launched:
-            for p in self.M["pads"]:
-                if math.hypot(nx - p["pos"][0], nz - p["pos"][2]) <= p["r"] and abs(y - p["pos"][1]) <= 0.5:
-                    if "dir" in p:
-                        ux, uz = p["dir"]
-                    else:
-                        ux, uz = p["to"][0] - p["pos"][0], p["to"][1] - p["pos"][2]
-                    k = math.hypot(ux, uz) or 1.0
-                    self.launch_v = (ux / k * p["vh"], uz / k * p["vh"])
-                    self.vx, self.vz = self.launch_v
-                    self.vy, self.grounded, self.launched = float(p["vy"]), False, True
-                    break
-        # wind
-        if self.wind_on:
-            self._wind_tick()
-            if self.wind["active"]:
-                a = math.radians(self.wind["dir"])
-                wx2, wz2 = self.pos[0] + math.cos(a) * T["wind_speed"] * DT, self.pos[2] + math.sin(a) * T["wind_speed"] * DT
-                if self.terrain.walk_ok(wx2, wz2, self.pos[1]):
-                    self.pos[0], self.pos[2] = wx2, wz2
-        # vertical
-        x, z = self.pos[0], self.pos[2]
-        if not dashing and self.grounded:
+
+    def _use_pads(self):
+        if self.launched:
+            return
+        x, y, z = self.pos
+        for p in self.M["pads"]:
+            if math.hypot(x - p["pos"][0], z - p["pos"][2]) <= p["r"] and abs(y - p["pos"][1]) <= 0.5:
+                ux, uz = p["dir"] if "dir" in p else (p["to"][0] - p["pos"][0], p["to"][1] - p["pos"][2])
+                ux, uz = unit(ux, uz)
+                self.launch_v = (ux * p["vh"], uz * p["vh"])
+                self.vx, self.vz = self.launch_v
+                self.vy, self.grounded, self.launched = float(p["vy"]), False, True
+                return
+
+    def _blow_wind(self):
+        if not self.wind_on:
+            return
+        self._wind_tick()
+        if self.wind["active"]:
+            a, k = math.radians(self.wind["dir"]), self.T["wind_speed"] * DT
+            x, z = self.pos[0] + math.cos(a) * k, self.pos[2] + math.sin(a) * k
+            if self.terrain.walk_ok(x, z, self.pos[1]):
+                self.pos[0], self.pos[2] = x, z
+
+    def _vertical(self):
+        """Stay on the ground (snapping up/down small steps) or fall under gravity and land."""
+        T, x, z = self.T, self.pos[0], self.pos[2]
+        if self.grounded:
             h = self.terrain.height(x, z)
             if h is not None and self.pos[1] - h <= T["step_up_m"]:
                 self.pos[1] = h
             else:
                 self.grounded = False
-        if not dashing and not self.grounded:
+        if not self.grounded:
             self.vy -= T["gravity"] * DT
             self.pos[1] += self.vy * DT
             h = self.terrain.height(x, z)
             if h is not None and self.pos[1] <= h and self.vy <= 0:
                 self.pos[1], self.vy, self.grounded, self.launched = h, 0.0, True, False
+
+    def _check_fall(self, ev):
+        T = self.T
         if self.pos[1] < T["fall_y"] and self.fall_wait == 0:
             lost, self.carried = self.carried, 0
             self.flames -= 1
             self.fall_wait = T["fall_wait_ticks"]
             self.vx = self.vy = self.vz = 0.0
-            self.launched = False
-            self.dash_left = 0
+            self.launched, self.dash_left = False, 0
             ev("player_hit", {"by": "fall", "flames": self.flames, "dropped": 0, "lost": lost})
 
     def _wind_tick(self):
@@ -423,7 +450,7 @@ class Sim:
                 c = s["ec"]
                 dx, dz = s["pos"][0] - c[0], s["pos"][2] - c[2]
                 d = math.hypot(dx, dz)
-                ux, uz = (dx / d, dz / d) if d > 1e-9 else (1.0, 0.0)
+                ux, uz = unit(dx, dz)
                 step = max(0.0, r - d) / s["eject"]
                 s["pos"][0] += ux * step
                 s["pos"][2] += uz * step
@@ -439,9 +466,8 @@ class Sim:
         for s in self.shades:
             dx, dz = s["pos"][0] - cx, s["pos"][2] - cz
             if math.sqrt(dx * dx + dz * dz + (s["pos"][1] - cy) ** 2) <= T["pulse_radius"]:
-                dd = math.hypot(dx, dz)
                 s["state"], s["left"], s["push"] = "stunned", T["pulse_stun_ticks"], T["pulse_push_ticks"]
-                s["dir"] = (dx / dd, dz / dd) if dd > 1e-9 else (1.0, 0.0)
+                s["dir"] = unit(dx, dz)
                 self.score += T["score"]["per_stun"]
                 hit.append(s["id"])
         for d in self.drifters:
@@ -467,54 +493,60 @@ class Sim:
         return False
 
     def _move_shades(self):
-        T = self.T
-        speed = T["shade_speed_night3"] if self.night == 3 else T["shade_speed"]
+        speed = self.T["shade_speed_night3"] if self.night == 3 else self.T["shade_speed"]
         lit = [l for l in self.lanterns if l["lit"]]
         for s in self.shades:
-            px, pz = self.pos[0] - s["pos"][0], self.pos[2] - s["pos"][2]
-            d = math.hypot(px, pz)
-            st = s["state"]
-            if st == "spawning":
-                st = s["state"] = "chase" if d <= T["shade_detect_m"] else "wander"
-            if s["eject"] > 0:
-                pass
-            elif st == "stunned":
-                if s["push"] > 0:
-                    k = T["pulse_push_m"] / T["pulse_push_ticks"]
-                    if not self._shade_move(s, s["dir"][0] * k, s["dir"][1] * k):
-                        s["push"] = 0
-                    else:
-                        s["push"] -= 1
-            elif st == "recoil":
-                self._shade_move(s, s["dir"][0] * T["recoil_m"] / T["recoil_ticks"], s["dir"][1] * T["recoil_m"] / T["recoil_ticks"])
-                s["left"] -= 1
-                if s["left"] <= 0:
-                    s["state"] = "chase"
-            else:
-                if st == "wander" and d <= T["shade_detect_m"]:
-                    st = s["state"] = "chase"
-                elif st == "chase" and d > T["shade_lose_m"]:
-                    st = s["state"] = "wander"
-                if st == "chase" and d > 1e-9:
-                    k = min(speed * DT, d)
-                    self._shade_move(s, px / d * k, pz / d * k)
-                elif st == "wander":
-                    if s["turn"] <= 0:
-                        a = self.rnd() * math.tau
-                        s["dir"], s["turn"] = (math.cos(a), math.sin(a)), T["shade_wander_turn_ticks"]
-                    s["turn"] -= 1
-                    k = T["shade_wander_speed"] * DT
-                    if not self._shade_move(s, s["dir"][0] * k, s["dir"][1] * k):
-                        s["turn"] = 0
-            if s["eject"] <= 0:   # lit lanterns block shades at the safe-zone edge
-                for l in lit:
-                    ox, oz = s["pos"][0] - l["pos"][0], s["pos"][2] - l["pos"][2]
-                    od = math.hypot(ox, oz)
-                    if od < T["safe_radius"]:
-                        ux, uz = (ox / od, oz / od) if od > 1e-9 else (1.0, 0.0)
-                        s["pos"][0], s["pos"][2] = l["pos"][0] + ux * T["safe_radius"], l["pos"][2] + uz * T["safe_radius"]
+            self._shade_ai(s, speed)
+            if s["eject"] <= 0:
+                self._keep_out_of_safe_zones(s, lit)
             h = self.terrain.height(s["pos"][0], s["pos"][2])
-            s["pos"][1] = h if h is not None else s["pos"][1]
+            if h is not None:
+                s["pos"][1] = h
+
+    def _shade_ai(self, s, speed):
+        """One tick of shade behaviour by state. States: spawning -> wander <-> chase; recoil/stunned from hits and pulses."""
+        T = self.T
+        px, pz = self.pos[0] - s["pos"][0], self.pos[2] - s["pos"][2]
+        d = math.hypot(px, pz)
+        if s["state"] == "spawning":
+            s["state"] = "chase" if d <= T["shade_detect_m"] else "wander"
+        if s["eject"] > 0:          # being pushed out of a fresh safe zone (see _eject)
+            return
+        st = s["state"]
+        if st == "stunned":
+            if s["push"] > 0:
+                k = T["pulse_push_m"] / T["pulse_push_ticks"]
+                s["push"] = s["push"] - 1 if self._shade_move(s, s["dir"][0] * k, s["dir"][1] * k) else 0
+        elif st == "recoil":
+            k = T["recoil_m"] / T["recoil_ticks"]
+            self._shade_move(s, s["dir"][0] * k, s["dir"][1] * k)
+            s["left"] -= 1
+            if s["left"] <= 0:
+                s["state"] = "chase"
+        else:
+            if st == "wander" and d <= T["shade_detect_m"]:
+                st = s["state"] = "chase"
+            elif st == "chase" and d > T["shade_lose_m"]:
+                st = s["state"] = "wander"
+            if st == "chase" and d > 1e-9:
+                k = min(speed * DT, d)
+                self._shade_move(s, px / d * k, pz / d * k)
+            elif st == "wander":
+                if s["turn"] <= 0:
+                    a = self.rnd() * math.tau
+                    s["dir"], s["turn"] = (math.cos(a), math.sin(a)), T["shade_wander_turn_ticks"]
+                s["turn"] -= 1
+                k = T["shade_wander_speed"] * DT
+                if not self._shade_move(s, s["dir"][0] * k, s["dir"][1] * k):
+                    s["turn"] = 0
+
+    def _keep_out_of_safe_zones(self, s, lit):
+        r = self.T["safe_radius"]
+        for l in lit:
+            dx, dz = s["pos"][0] - l["pos"][0], s["pos"][2] - l["pos"][2]
+            if math.hypot(dx, dz) < r:
+                ux, uz = unit(dx, dz)
+                s["pos"][0], s["pos"][2] = l["pos"][0] + ux * r, l["pos"][2] + uz * r
 
     def _move_drifters(self):
         T = self.T
@@ -579,9 +611,8 @@ class Sim:
                     self._add_mote([x, self.pos[1] if h is None else h, z], "dropped", T["mote_drop_ttl_ticks"], None)
                 self.flames -= 1
                 self.invuln = T["invuln_ticks"]
-                dx, dz = s["pos"][0] - self.pos[0], s["pos"][2] - self.pos[2]
-                dd = math.hypot(dx, dz)
-                s["state"], s["left"], s["dir"] = "recoil", T["recoil_ticks"], ((dx / dd, dz / dd) if dd > 1e-9 else (1.0, 0.0))
+                s["state"], s["left"] = "recoil", T["recoil_ticks"]
+                s["dir"] = unit(s["pos"][0] - self.pos[0], s["pos"][2] - self.pos[2])
                 ev("player_hit", {"by": "shade", "flames": self.flames, "dropped": n})
                 break
 

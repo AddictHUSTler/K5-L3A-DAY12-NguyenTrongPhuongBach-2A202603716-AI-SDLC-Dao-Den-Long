@@ -12,6 +12,17 @@ python3 -m game.headless --seed 1 --night 2 --ticks 600 --out out.jsonl   # head
 Controls: WASD move, Space jump, Shift dash, E deposit light into a lantern, Q pulse (3 light), mouse (click to lock) or arrows rotate camera, Esc/P pause.
 Three nights: Đảo Bến, Đảo Cau, Đảo Chuông. Scoring (+10 per light deposited, +100 per lantern, +5 per Shade pulsed, win bonus) and every number: `game.contract.json`. Spec + acceptance criteria: `docs/spec-phase2.md`. Assumptions: `docs/notes/assumptions.md`. Evidence: `docs/proof/`.
 
+## Code map (where to look when something breaks)
+| Problem | File |
+|---|---|
+| A number or map is wrong | `game.contract.json` (`tuning`, `maps`) |
+| Ground, walls, ramps, spawn points | `game/world.py` |
+| A rule (movement, pulse, shades, drifters, scoring, win/lose) | `game/sim.py`, one method per rule, stages numbered in tick order |
+| Headless input/output format | `game/headless.py` |
+| Browser server | `game/server.py` |
+| Look, HUD, menus | `web/main.js`, `web/style.css`; sound and settings: `web/audio.js` |
+| Expected behaviour | `tests/test_sim.py`, `scenarios/`, `docs/spec-phase2.md` |
+
 ## Sáng tạo của tôi
 **Lantern chime.** Lighting a lantern rings a note; each lantern is one step higher on a pentatonic scale, so lighting them all plays a rising tune. Browser-only (`web/index.html`, driven by the existing `lantern_lit` event); `game/` is untouched, so headless output is identical (`test_deterministic`). Kept in Phase 2: it rings when a lantern is lit.
 

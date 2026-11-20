@@ -11,6 +11,12 @@ def ring_points(rings):
     return out
 
 
+def unit(dx, dz, default=(1.0, 0.0)):
+    """Unit vector of (dx, dz); `default` when the length is ~0."""
+    d = math.hypot(dx, dz)
+    return (dx / d, dz / d) if d > 1e-9 else default
+
+
 class Terrain:
     def __init__(self, map_data, step_up):
         self.M, self.step_up = map_data, step_up
