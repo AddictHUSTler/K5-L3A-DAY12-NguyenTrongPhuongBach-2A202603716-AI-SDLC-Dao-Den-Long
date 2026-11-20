@@ -2,3 +2,5 @@ QUICKSTART.md
 __pycache__/
 .env
 *.jsonl
+phase2.md
+phase3-prep.md
