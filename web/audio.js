@@ -1,6 +1,8 @@
 // Settings (saved in localStorage) and synthesized audio. Client only: never touches the sim.
-export const cfg = {vol:.6, sens:.5, cb:false};
-try { Object.assign(cfg, JSON.parse(localStorage.getItem("ddl") || "{}")); } catch(e) {}
+export const ACTIONS = [["up","Đi lên"],["down","Đi xuống"],["left","Sang trái"],["right","Sang phải"],["jump","Nhảy"],["dash","Lướt"],["interact","Tương tác"],["pulse","Tỏa Sáng"],["pause","Tạm dừng"]];
+export const DEFAULT_KEYS = {up:"KeyW", down:"KeyS", left:"KeyA", right:"KeyD", jump:"Space", dash:"ShiftLeft", interact:"KeyE", pulse:"KeyQ", pause:"Escape"};
+export const cfg = {vol:.6, sens:.5, cb:false, rm:false, big:false, keys:{...DEFAULT_KEYS}};
+try { Object.assign(cfg, JSON.parse(localStorage.getItem("ddl") || "{}")); cfg.keys = {...DEFAULT_KEYS, ...cfg.keys}; } catch(e) {}
 export const save = () => { try { localStorage.setItem("ddl", JSON.stringify(cfg)); } catch(e) {} };
 // ---- audio (WebAudio synth; client only)
 let ac;
