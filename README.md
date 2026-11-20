@@ -5,15 +5,15 @@
 3D lantern game. Logic is pure Python (stdlib only); the browser draws it.
 
 ```bash
-python3 -m game.server          # then open http://localhost:8000
+python3 -m game.server          # then open http://localhost:8000 (needs internet for three.js from unpkg)
 ./scripts/test.sh               # all tests
-python3 -m game.headless --seed 1 --ticks 600 --out out.jsonl   # headless (Test Contract v1.0)
+python3 -m game.headless --seed 1 --night 2 --ticks 600 --out out.jsonl   # headless (Test Contract v1.1)
 ```
-Controls: WASD move, Space jump, E deposit light into a lantern, Q pulse (costs 2 light), arrows rotate camera, R restart.
-Scoring: +10 per light picked, +200 per lantern lit, +25 per Shade stunned; on a win, +2 per second left and +100 per flame left. All numbers: `game.contract.json`. Assumptions: `docs/notes/assumptions.md`. Evidence: `docs/proof/`.
+Controls: WASD move, Space jump, Shift dash, E deposit light into a lantern, Q pulse (3 light), mouse (click to lock) or arrows rotate camera, Esc/P pause.
+Three nights: Đảo Bến, Đảo Cau, Đảo Chuông. Scoring (+10 per light deposited, +100 per lantern, +5 per Shade pulsed, win bonus) and every number: `game.contract.json`. Spec + acceptance criteria: `docs/spec-phase2.md`. Assumptions: `docs/notes/assumptions.md`. Evidence: `docs/proof/`.
 
 ## Sáng tạo của tôi
-**Lantern chime.** Lighting a lantern rings a note; each lantern is one step higher on a pentatonic scale, so lighting them all plays a rising tune. Browser-only (`web/index.html`, driven by the existing `lantern_lit` event); `game/` is untouched, so headless output is identical. Evidence: `./scripts/test.sh` still passes and `git diff phase-1 -- game` is empty.
+**Lantern chime.** Lighting a lantern rings a note; each lantern is one step higher on a pentatonic scale, so lighting them all plays a rising tune. Browser-only (`web/index.html`, driven by the existing `lantern_lit` event); `game/` is untouched, so headless output is identical (`test_deterministic`). Kept in Phase 2: it rings when a lantern is lit.
 
 ---
 
