@@ -1,3 +1,22 @@
+# Đảo Đèn Lồng: my build
+
+**Demo video:** _(add link before final submission)_
+
+3D lantern game. Logic is pure Python (stdlib only); the browser draws it.
+
+```bash
+python3 -m game.server          # then open http://localhost:8000
+./scripts/test.sh               # all tests
+python3 -m game.headless --seed 1 --ticks 600 --out out.jsonl   # headless (Test Contract v1.0)
+```
+Controls: WASD move, Space jump, E deposit light into a lantern, Q pulse (costs 2 light), arrows rotate camera, R restart.
+Scoring: +10 per light picked, +200 per lantern lit, +25 per Shade stunned; on a win, +2 per second left and +100 per flame left. All numbers: `game.contract.json`. Assumptions: `docs/notes/assumptions.md`. Evidence: `docs/proof/`.
+
+## Sáng tạo của tôi
+_(none yet)_
+
+---
+
 # Day 12 — AI SDLC: Đảo Đèn Lồng
 
 > **Cá nhân** (1 người / 1 MSSV) · Áp dụng SDLC cùng AI để xây một **game 3D** qua **4 phase**, từ yêu cầu ban đầu tới bản phát hành.

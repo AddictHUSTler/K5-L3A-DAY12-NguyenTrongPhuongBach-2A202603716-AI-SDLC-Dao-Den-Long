@@ -1,0 +1,58 @@
+<!doctype html><meta charset=utf-8><title>Đảo Đèn Lồng</title>
+<style>body{margin:0;background:#0E1430;color:#F5F1E6;font:15px sans-serif;overflow:hidden}
+#hud{position:fixed;top:10px;left:12px;line-height:1.5;text-shadow:0 0 4px #000}
+#msg{position:fixed;inset:0;display:none;place-items:center;font-size:34px;background:#000a;text-align:center}</style>
+<div id=hud></div><div id=msg></div>
+<script type=importmap>{"imports":{"three":"https://unpkg.com/three@0.160.0/build/three.module.js"}}</script>
+<script type=module>
+import * as THREE from "three";
+const scene = new THREE.Scene(); scene.background = new THREE.Color(0x0a1030); scene.fog = new THREE.FogExp2(0x1f3366, 0.012);
+const cam = new THREE.PerspectiveCamera(55, innerWidth/innerHeight, .1, 500);
+const R = new THREE.WebGLRenderer({antialias:true}); R.setSize(innerWidth, innerHeight); document.body.append(R.domElement);
+scene.add(new THREE.HemisphereLight(0x8aa4e0, 0x203020, 1.1));
+const ground = new THREE.Mesh(new THREE.CircleGeometry(100, 64), new THREE.MeshStandardMaterial({color:0x2c5a3a})); ground.rotation.x = -Math.PI/2; scene.add(ground);
+const player = new THREE.Group();
+player.add(new THREE.Mesh(new THREE.CylinderGeometry(.4,.4,1.4,12), new THREE.MeshStandardMaterial({color:0xe8d8b0})));
+const hat = new THREE.Mesh(new THREE.ConeGeometry(.9,.6,16), new THREE.MeshStandardMaterial({color:0xd9b86a})); hat.position.y = 1.6; player.add(hat);
+const hl = new THREE.PointLight(0xffb347, 40, 14); hl.position.y = 1.2; player.add(hl); scene.add(player);
+const mk = (geo, mat) => new THREE.Mesh(geo, mat);
+const pools = {m:{}, s:{}, l:{}};
+const moteGeo = new THREE.SphereGeometry(.25,8,8), moteMat = new THREE.MeshBasicMaterial({color:0xffe58a});
+const shadeGeo = new THREE.SphereGeometry(.9,12,12);
+function sync(pool, items, make) {
+  const ids = new Set(items.map(i => i.id));
+  for (const id in pool) if (!ids.has(id)) { scene.remove(pool[id]); delete pool[id]; }
+  for (const it of items) { if (!pool[it.id]) { pool[it.id] = make(it); scene.add(pool[it.id]); } pool[it.id].position.set(it.pos[0], pool[it.id].userData.y ?? it.pos[1], it.pos[2]); }
+}
+const keys = {}; let yaw = 0, last = performance.now(), state = "playing", busy = false;
+addEventListener("keydown", e => { keys[e.code] = true; if (e.code === "KeyR") reset(); });
+addEventListener("keyup", e => keys[e.code] = false);
+addEventListener("resize", () => { R.setSize(innerWidth, innerHeight); cam.aspect = innerWidth/innerHeight; cam.updateProjectionMatrix(); });
+const post = (p, b) => fetch(p, {method:"POST", body:JSON.stringify(b)}).then(r => r.json());
+function draw(s) {
+  state = s.state; player.position.set(...s.player.pos);
+  sync(pools.m, s.motes, () => mk(moteGeo, moteMat));
+  sync(pools.s, s.shades, () => mk(shadeGeo, new THREE.MeshStandardMaterial({color:0x2a1450, emissive:0x7a3cff, emissiveIntensity:.5})));
+  sync(pools.l, s.lanterns, l => { const g = new THREE.Group(); g.userData.y = 0; g.add(mk(new THREE.CylinderGeometry(.2,.2,3,8), new THREE.MeshStandardMaterial({color:0x554433}))); const b = mk(new THREE.SphereGeometry(.7,12,12), new THREE.MeshStandardMaterial({color:0x333344})); b.position.y = 3.2; b.name = "bulb"; g.add(b); const pl = new THREE.PointLight(0xffb347, 0, 30); pl.position.y = 3.2; pl.name = "pl"; g.add(pl); return g; });
+  s.lanterns.forEach(l => { const g = pools.l[l.id], b = g.getObjectByName("bulb"); b.material.color.set(l.lit ? 0xffe9b0 : 0x333344); b.material.emissive.set(l.lit ? 0xffb347 : 0); g.getObjectByName("pl").intensity = l.lit ? 200 : 0; });
+  const lit = s.lanterns.filter(l => l.lit).length;
+  document.getElementById("hud").innerHTML = `Đèn ${lit}/${s.lanterns.length} · Điểm ${s.score}<br>Máu ${"🔥".repeat(Math.max(0,s.player.flames))} · Ánh sáng mang ${s.player.carried}/6 · Còn ${Math.ceil(s.time_left_s)}s<br><small>WASD đi · Space nhảy · E thắp đèn · Q tỏa sáng · ←/→ xoay camera · R chơi lại</small>`;
+  const m = document.getElementById("msg"); m.style.display = state === "playing" ? "none" : "grid";
+  m.innerHTML = state === "won" ? `Thắng! Điểm ${s.score}<br><small>R để chơi lại</small>` : `Thua<br><small>R để chơi lại</small>`;
+  cam.position.set(s.player.pos[0] - Math.sin(yaw)*12, 8, s.player.pos[2] - Math.cos(yaw)*12); cam.lookAt(player.position.x, 1.5, player.position.z);
+}
+async function reset() { draw((await post("/reset", {})).snap); }
+async function loop(now) {
+  const steps = Math.min(Math.round((now - last) * 0.06), 6); last = now;
+  if (keys.ArrowLeft) yaw += .03; if (keys.ArrowRight) yaw -= .03;
+  if (!busy && state === "playing" && steps > 0) {
+    busy = true;
+    const x = (keys.KeyD?1:0) - (keys.KeyA?1:0), z = (keys.KeyW?1:0) - (keys.KeyS?1:0);
+    const inputs = {move:[x,z], cam_yaw_deg: yaw*180/Math.PI, jump: !!keys.Space, interact: !!keys.KeyE, pulse: !!keys.KeyQ};
+    try { draw((await post("/step", {inputs, steps})).snap); } catch(e) {}
+    busy = false;
+  }
+  R.render(scene, cam); requestAnimationFrame(loop);
+}
+await reset(); requestAnimationFrame(loop);
+</script>

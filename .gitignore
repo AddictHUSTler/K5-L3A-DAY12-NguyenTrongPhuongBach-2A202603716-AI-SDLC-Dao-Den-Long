@@ -1,0 +1,4 @@
+QUICKSTART.md
+__pycache__/
+.env
+*.jsonl
