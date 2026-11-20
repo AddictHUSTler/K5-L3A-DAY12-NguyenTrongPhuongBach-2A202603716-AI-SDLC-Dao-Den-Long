@@ -7,6 +7,10 @@ WEB = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 
 sim = Sim(random.randrange(1 << 30))
 
 
+def new(night):
+    return Sim(random.randrange(1 << 30), night=night if night in (1, 2, 3) else 1)
+
+
 class H(BaseHTTPRequestHandler):
     def log_message(self, *a): pass
 
@@ -22,11 +26,11 @@ class H(BaseHTTPRequestHandler):
         global sim
         body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))) or b"{}")
         if self.path == "/reset":
-            sim = Sim(random.randrange(1 << 30))
-            ev = []
-        else:   # /step: {inputs, steps}
-            sim.set_inputs(body.get("inputs", {}))
-            ev = [{"name": n, "data": d} for _ in range(min(int(body.get("steps", 1)), 10)) for n, d in sim.step()]
+            sim = new(int(body.get("night", 1)))
+            return self.send(json.dumps({"snap": sim.snapshot(), "events": [], "layout": sim.layout()}).encode())
+        # /step: {inputs, steps}
+        sim.set_inputs(body.get("inputs", {}))
+        ev = [{"name": n, "data": d} for _ in range(min(int(body.get("steps", 1)), 10)) for n, d in sim.step()]
         self.send(json.dumps({"snap": sim.snapshot(), "events": ev}).encode())
 
 

@@ -1,22 +1,24 @@
-"""Pure game logic for Đảo Đèn Lồng. No I/O, no rendering, no wall-clock. Deterministic per seed."""
+"""Pure game logic for Đảo Đèn Lồng, Test Contract v1.1. No I/O, no rendering, no wall-clock.
+Deterministic per seed. All numbers and maps come from game.contract.json."""
 import json, math, os
 
 DT = 1.0 / 60.0
 CONTRACT_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "game.contract.json")
-ISLAND_R = 100.0
-JUMP_V, GRAVITY = 7.0, 20.0
-LANTERN_POS = [[30, 0, -18], [52, 0, 40], [-8, 0, 64], [-58, 0, -26], [-14, 0, -56]]
-MOTE_INIT, MOTE_MAX, MOTE_EVERY_TICKS = 28, 40, 144       # 2.4 s
-SHADE_FIRST_S, SHADE_EVERY_S, SHADE_MAX, SHADE_SPAWN_R = 22, 20, 4, 70.0
+SHADE_STATES = ("spawning", "wander", "chase", "recoil", "stunned")
+DRIFTER_STATES = ("idle", "chase", "flee")
 
 
 class ScenarioError(ValueError):
     pass
 
 
-def load_tuning(path=CONTRACT_PATH):
+def load_contract(path=CONTRACT_PATH):
     with open(path) as f:
-        return json.load(f)["tuning"]
+        return json.load(f)
+
+
+def load_tuning(path=CONTRACT_PATH):
+    return load_contract(path)["tuning"]
 
 
 def mulberry32(seed):
@@ -34,58 +36,164 @@ def r3(v):
     return round(v, 3) + 0.0
 
 
+def ticks(s):
+    return round(s * 60)
+
+
+def num(v):
+    return isinstance(v, (int, float)) and not isinstance(v, bool)
+
+
 def vec(v, name):
-    if not (isinstance(v, list) and len(v) == 3 and all(isinstance(x, (int, float)) and not isinstance(x, bool) for x in v)):
+    if not (isinstance(v, list) and len(v) == 3 and all(num(x) for x in v)):
         raise ScenarioError(f"{name} must be [x, y, z]")
     return [float(x) for x in v]
 
 
+def ring_points(rings):
+    out = []
+    for g in rings:
+        for i in range(g["n"]):
+            a = math.radians(g["start"] + g["step"] * i)
+            out.append([g["c"][0] + g["r"] * math.cos(a), float(g["y"]), g["c"][1] + g["r"] * math.sin(a)])
+    return out
+
+
 class Sim:
-    def __init__(self, seed=0, scenario=None, tuning=None):
-        self.T = tuning or load_tuning()
+    def __init__(self, seed=0, scenario=None, tuning=None, night=1, contract=None):
+        con = contract or load_contract()
+        self.T = tuning or con["tuning"]
+        if night not in (1, 2, 3):
+            raise ScenarioError("night must be 1, 2 or 3")
+        self.night, self.M = night, con["maps"][str(night)]
         self.rnd = mulberry32(seed)
         sc = scenario or {}
         if not isinstance(sc, dict):
             raise ScenarioError("scenario must be an object")
-        T = self.T
-        self.steps = 0
-        self.state = "playing"
+        T, M = self.T, self.M
+        self.tick = self.sim_tick = 0
+        self.state, self.paused, self.started = "playing", False, False
         self.score = 0
-        self.base_time = float(sc.get("time_left_s", T["night1_duration_s"]))
+        self.base_ticks = ticks(float(sc.get("time_left_s", T[M["duration_key"]])))
+        self.mote_pts, self.shade_pts = ring_points(M["mote_rings"]), ring_points(M["shade_rings"])
+        # player
         p = sc.get("player", {})
-        self.pos = vec(p.get("pos", [0, 0, 0]), "player.pos")
-        self.vy = 0.0
+        self.start = list(map(float, M["start"]))
+        self.pos = vec(p["pos"], "player.pos") if "pos" in p else list(self.start)
+        self.vx = self.vz = self.vy = 0.0
+        if "vel" in p:
+            self.vx, self.vy, self.vz = vec(p["vel"], "player.vel")
+        h = self.height(self.pos[0], self.pos[2])
+        self.grounded = h is not None and abs(self.pos[1] - h) < 1e-6
+        self.face = (0.0, 1.0)
         self.flames = int(p.get("flames", T["flames"]))
         self.carried = int(p.get("carried", 0))
-        self.invuln = 0.0
-        self.pulse_cd = 0.0
-        self.lanterns = [{"id": f"L{i+1}", "pos": list(map(float, q)), "lit": False, "deposited": 0}
-                         for i, q in enumerate(LANTERN_POS[:T["lantern_count_night1"]])]
+        self.invuln = int(p.get("invuln_ticks", 0))
+        self.dash_cd = int(p.get("dash_cd_ticks", 0))
+        self.pulse_cd = int(p.get("pulse_cd_ticks", 0))
+        self.charm = int(p.get("charm_ticks", 0))
+        self.dash_left, self.dash_dir = 0, (0.0, 1.0)
+        self.launched, self.launch_v = False, (0.0, 0.0)
+        self.fall_wait = 0
+        # lanterns
+        self.lanterns = [{"id": f"L{i+1}", "pos": list(map(float, q)), "lit": False, "deposited": 0} for i, q in enumerate(M["lanterns"])]
         for u in sc.get("lanterns", []):
             self._apply_lantern(u)
-        self.motes, self.shades = [], []
-        self.mote_n = self.shade_n = 0
-        self.random_shades = sc.get("random_shades", True)
+        # motes
+        self.motes, self.shades, self.mote_n, self.shade_n, self.drifter_n = [], [], 0, 0, 0
         self.random_motes = sc.get("random_motes", True)
+        self.random_shades = sc.get("random_shades", True)
+        self.random_drifters = sc.get("random_drifters", night >= 2)
+        self.wind_on = sc.get("wind_enabled", bool(M.get("wind")))
         if "motes" in sc:
             for m in sc["motes"]:
-                self.motes.append({"id": f"M{self._next('mote_n')}", "pos": vec(m, "motes[]")})
+                if isinstance(m, dict):
+                    self._add_mote(vec(m.get("pos"), "motes[].pos"), m.get("kind", "random"), m.get("ttl_ticks"), None)
+                else:
+                    self._add_mote(vec(m, "motes[]"), "random", None, None)
         elif self.random_motes:
-            for _ in range(MOTE_INIT):
-                self._spawn_mote()
-        if "shades" in sc:
-            self.shades = []
-            for s in sc["shades"]:
-                sid = s.get("id") or f"S{self._next('shade_n')}"
-                self.shades.append({"id": sid, "pos": vec(s.get("pos"), "shades[].pos"), "state": "chase", "stun": 0.0})
-            self.shade_n = len(self.shades)
-        self.in_ = {"move": [0.0, 0.0], "cam_yaw_deg": 0.0, "jump": False, "interact": False, "pulse": False}
-        self.prev = {"jump": False, "interact": False, "pulse": False}
+            idx = list(range(len(self.mote_pts)))
+            for _ in range(T["mote_initial"]):
+                i = idx.pop(int(self.rnd() * len(idx)))
+                self._add_mote(list(self.mote_pts[i]), "random", None, i)
+        # shades
+        for s in sc.get("shades", []):
+            st = s.get("state", "chase")
+            if st not in SHADE_STATES:
+                raise ScenarioError(f"bad shade state {st}")
+            sh = self._new_shade(s.get("id"), vec(s.get("pos"), "shades[].pos"), st)
+            sh["left"] = int(s.get("state_ticks_left", T["pulse_stun_ticks"] if st == "stunned" else T["recoil_ticks"] if st == "recoil" else 0))
+            self.shades.append(sh)
+        # drifters, charms
+        self.drifters = []
+        for d in sc.get("drifters", []):
+            st = d.get("state", "idle")
+            if st not in DRIFTER_STATES:
+                raise ScenarioError(f"bad drifter state {st}")
+            self.drifters.append(self._new_drifter(d.get("id"), vec(d.get("pos"), "drifters[].pos"), st, int(d.get("stolen", 0)), int(d.get("state_ticks_left", T["drifter_flee_ticks"]))))
+        if "charms" in sc:
+            self.charms = [{"id": c.get("id") or f"C{i+1}", "pos": vec(c.get("pos"), "charms[].pos"), "available": bool(c.get("available", True)), "respawn": int(c.get("respawn_ticks", 0))} for i, c in enumerate(sc["charms"])]
+        else:
+            self.charms = [{"id": f"C{i+1}", "pos": list(map(float, q)), "available": True, "respawn": 0} for i, q in enumerate(M["charms"])]
+        self.wind = {"active": False, "warn": False, "dir": 0.0, "next": ticks(T["wind_every_s"]), "end": 0}
+        self.in_ = {"move": [0.0, 0.0], "cam_yaw_deg": 0.0, "jump": False, "interact": False, "pulse": False, "dash": False, "pause": False}
+        self.prev = {k: False for k in ("jump", "interact", "pulse", "dash", "pause")}
+
+    # ---- terrain
+    def height(self, x, z):
+        """Ground height at (x, z), or None over the cloud sea."""
+        M, h = self.M, None
+        def up(v):
+            nonlocal h
+            h = v if h is None else max(h, v)
+        for d in M["discs"]:
+            if math.hypot(x - d["c"][0], z - d["c"][1]) <= d["r"]:
+                up(d["y"])
+        for r in M.get("rects", []):
+            if r["x0"] <= x <= r["x1"] and r["z0"] <= z <= r["z1"]:
+                up(r["y"])
+        for r in M.get("half_rings", []):
+            if z > 0 and r["r0"] <= math.hypot(x, z) <= r["r1"]:
+                up(r["y"])
+        for r in M.get("ramps", []):
+            a = math.radians(r["deg"])
+            s, lat = x * math.cos(a) + z * math.sin(a), -x * math.sin(a) + z * math.cos(a)
+            if r["r0"] <= s <= r["r1"] and abs(lat) <= r["w"] / 2:
+                up(r["y0"] + (r["y1"] - r["y0"]) * (s - r["r0"]) / (r["r1"] - r["r0"]))
+        return h
+
+    def in_tower(self, x, z, y):
+        t = self.M.get("tower")
+        return bool(t) and math.hypot(x, z) <= t["r"] and y < t["y"] + t["h"]
+
+    def walk_ok(self, x, z, feet):
+        if self.in_tower(x, z, feet):
+            return False
+        h = self.height(x, z)
+        return h is None or h <= feet + self.T["step_up_m"]
+
+    def layout(self):
+        return json.loads(json.dumps(self.M))
 
     # ---- helpers
-    def _next(self, attr):
-        setattr(self, attr, getattr(self, attr) + 1)
-        return getattr(self, attr)
+    def _add_mote(self, pos, kind, ttl, idx):
+        self.mote_n += 1
+        self.motes.append({"id": f"M{self.mote_n}", "pos": pos, "kind": kind, "ttl": ttl, "idx": idx})
+
+    def _new_shade(self, sid, pos, state):
+        if not sid:
+            self.shade_n += 1
+            sid = f"S{self.shade_n}"
+            while any(s["id"] == sid for s in self.shades):
+                self.shade_n += 1
+                sid = f"S{self.shade_n}"
+        return {"id": sid, "pos": pos, "state": state, "left": 0, "dir": (1.0, 0.0), "push": 0, "eject": 0, "ec": None, "turn": 0}
+
+    def _new_drifter(self, did, pos, state, stolen, left):
+        if not did:
+            self.drifter_n += 1
+            did = f"D{self.drifter_n}"
+        return {"id": did, "pos": pos, "state": state, "stolen": stolen, "left": left, "dir": (1.0, 0.0), "turn": 0}
 
     def _apply_lantern(self, u):
         if not isinstance(u, dict) or "id" not in u:
@@ -103,45 +211,31 @@ class Sim:
         if u.get("lit"):
             L["lit"], L["deposited"] = True, max(L["deposited"], self.T["lantern_cost"])
 
-    def _spawn_mote(self):
-        for _ in range(20):
-            a, r = self.rnd() * math.tau, math.sqrt(self.rnd()) * (ISLAND_R - 12)
-            x, z = r * math.cos(a), r * math.sin(a)
-            if all(math.hypot(x - l["pos"][0], z - l["pos"][2]) > 3 for l in self.lanterns):
-                break
-        self.motes.append({"id": f"M{self._next('mote_n')}", "pos": [x, 0.0, z]})
+    def left_ticks(self):
+        return max(0, self.base_ticks - self.sim_tick)
 
-    def _spawn_shade(self, ev):
-        a = self.rnd() * math.tau
-        sid = f"S{self._next('shade_n')}"
-        while any(s["id"] == sid for s in self.shades):
-            sid = f"S{self._next('shade_n')}"
-        self.shades.append({"id": sid, "pos": [SHADE_SPAWN_R * math.cos(a), 1.0, SHADE_SPAWN_R * math.sin(a)], "state": "chase", "stun": 0.0})
-        ev("shade_spawned", {"id": sid})
-
-    def time_left(self):
-        return max(0.0, self.base_time - self.steps / 60.0)
+    def xz(self, a, b):
+        return math.hypot(a[0] - b[0], a[2] - b[2])
 
     # ---- input
     def set_inputs(self, ch):
         for k, v in ch.items():
-            if k in ("tick",):
+            if k == "tick":
                 continue
             if k == "move":
-                if not (isinstance(v, list) and len(v) == 2 and all(isinstance(x, (int, float)) and not isinstance(x, bool) and -1 <= x <= 1 for x in v)):
+                if not (isinstance(v, list) and len(v) == 2 and all(num(x) and -1 <= x <= 1 for x in v)):
                     raise ScenarioError("move must be [x, z] within [-1, 1]")
                 self.in_["move"] = [float(v[0]), float(v[1])]
             elif k == "cam_yaw_deg":
-                if not isinstance(v, (int, float)) or isinstance(v, bool):
+                if not num(v):
                     raise ScenarioError("cam_yaw_deg must be a number")
                 self.in_["cam_yaw_deg"] = float(v)
-            elif k in ("jump", "interact", "pulse", "dash"):
+            elif k in self.prev:
                 if not isinstance(v, bool):
                     raise ScenarioError(f"{k} must be boolean")
-                if k != "dash":
-                    self.in_[k] = v
+                self.in_[k] = v
 
-    # ---- step
+    # ---- step: stages follow the ticket's mandatory order
     def step(self):
         """Advance one tick; return list of (name, data) events."""
         evs = []
@@ -149,120 +243,199 @@ class Sim:
             return evs
         ev = lambda n, d: evs.append((n, d))
         T = self.T
-        self.steps += 1
-        # move
+        self.tick += 1
+        # 1. input / pause
+        if self.in_["pause"] and not self.prev["pause"]:
+            self.paused = not self.paused
+            ev("paused" if self.paused else "resumed", {})
+        self.prev["pause"] = self.in_["pause"]
+        if self.paused:
+            return evs
+        edge = {k: self.in_[k] and not self.prev[k] for k in self.prev}
+        for k in self.prev:
+            self.prev[k] = self.in_[k]
+        self.sim_tick += 1
+        if not self.started:
+            self.started = True
+            ev("night_start", {"night": self.night})
+        # 2. counters
+        self.invuln = max(0, self.invuln - 1)
+        self.dash_cd = max(0, self.dash_cd - 1)
+        self.pulse_cd = max(0, self.pulse_cd - 1)
+        self.charm = max(0, self.charm - 1)
+        respawn = False
+        if self.fall_wait > 0:
+            self.fall_wait -= 1
+            respawn = self.fall_wait == 0 and self.flames > 0
+        for m in self.motes:
+            if m["ttl"] is not None:
+                m["ttl"] -= 1
+        self.motes = [m for m in self.motes if m["ttl"] is None or m["ttl"] > 0]
+        for c in self.charms:
+            if not c["available"]:
+                c["respawn"] -= 1
+                if c["respawn"] <= 0:
+                    c["available"], c["respawn"] = True, 0
+        for s in self.shades:
+            if s["state"] == "stunned":
+                s["left"] -= 1
+                if s["left"] <= 0:
+                    s["state"], s["left"], s["push"] = "chase", 0, 0
+        # 3. move player
+        if respawn:
+            self.pos, self.vx, self.vy, self.vz = list(self.start), 0.0, 0.0, 0.0
+            self.grounded, self.launched, self.dash_left, self.invuln = True, False, 0, T["invuln_ticks"]
+        if self.fall_wait == 0:
+            self._move_player(ev, edge)
+        # 4. pickups
+        if self.fall_wait == 0:
+            self._pickups(ev)
+        # 5. lanterns
+        if edge["interact"] and self.fall_wait == 0:
+            self._interact(ev)
+        # 6. safe zones (ejection)
+        self._eject()
+        # 7. pulse
+        if edge["pulse"] and self.fall_wait == 0 and self.pulse_cd <= 0 and self.carried >= T["pulse_cost"]:
+            self._pulse(ev)
+        # 8. shades and drifters move
+        self._move_shades()
+        self._move_drifters()
+        # 9. contact: drifters first, then shades by id
+        if self.fall_wait == 0:
+            self._contact(ev)
+        # 10. scheduled spawns
+        self._spawns(ev)
+        # 11. win / lose
+        if self.flames <= 0:
+            self._end(ev, "lost", "no_flames")
+        elif all(l["lit"] for l in self.lanterns):
+            self._end(ev, "won", "all_lit")
+        elif self.left_ticks() <= 0:
+            self._end(ev, "lost", "dawn")
+        return evs
+
+    # ---- stage 3
+    def _move_player(self, ev, edge):
+        T = self.T
         mx, mz = self.in_["move"]
         n = math.hypot(mx, mz)
         if n > 1:
-            mx, mz = mx / n, mz / n
+            mx, mz, n = mx / n, mz / n, 1.0
         th = math.radians(self.in_["cam_yaw_deg"])
         wx, wz = mx * math.cos(th) + mz * math.sin(th), -mx * math.sin(th) + mz * math.cos(th)
-        self.pos[0] += wx * T["player_speed"] * DT
-        self.pos[2] += wz * T["player_speed"] * DT
-        d = math.hypot(self.pos[0], self.pos[2])
-        if d > ISLAND_R:
-            self.pos[0] *= ISLAND_R / d
-            self.pos[2] *= ISLAND_R / d
-        # jump / gravity
-        edge = {k: self.in_[k] and not self.prev[k] for k in self.prev}
-        self.prev = {k: self.in_[k] for k in self.prev}
-        if edge["jump"] and self.pos[1] <= 0:
-            self.vy = JUMP_V
-        if self.pos[1] > 0 or self.vy > 0:
-            self.vy -= GRAVITY * DT
-            self.pos[1] = max(0.0, self.pos[1] + self.vy * DT)
-            if self.pos[1] == 0:
-                self.vy = 0.0
-        # timers
-        self.invuln = max(0.0, self.invuln - DT)
-        self.pulse_cd = max(0.0, self.pulse_cd - DT)
-        for s in self.shades:
-            if s["state"] == "stunned":
-                s["stun"] -= DT
-                if s["stun"] <= 0:
-                    s["state"], s["stun"] = "chase", 0.0
-        # interact
-        if edge["interact"]:
-            self._interact(ev)
-            if self.state != "playing":
-                return evs
-        # pulse
-        if edge["pulse"] and self.pulse_cd <= 0 and self.carried >= T["pulse_cost"]:
-            self.carried -= T["pulse_cost"]
-            self.pulse_cd = T["pulse_cooldown_s"]
-            hit = []
-            for s in self.shades:
-                dx, dz = s["pos"][0] - self.pos[0], s["pos"][2] - self.pos[2]
-                dd = math.hypot(dx, dz)
-                if dd <= T["pulse_radius"]:
-                    if s["state"] != "stunned":
-                        self.score += T["score"]["per_stun"]
-                    s["state"], s["stun"] = "stunned", T["pulse_stun_s"]
-                    ux, uz = (dx / dd, dz / dd) if dd > 1e-9 else (1.0, 0.0)
-                    s["pos"][0] += ux * T["pulse_push_m"]
-                    s["pos"][2] += uz * T["pulse_push_m"]
-                    hit.append(s["id"])
-            ev("pulse", {"stunned_ids": hit})
-        # pickup
+        speed = T["charm_speed"] if self.charm > 0 else T["player_speed"]
+        tvx, tvz = wx * speed, wz * speed
+        if n > 1e-9:
+            self.face = (wx / n, wz / n)
+        if edge["jump"] and self.grounded:
+            self.vy, self.grounded = T["jump_speed"], False
+        if edge["dash"] and self.dash_cd <= 0 and self.dash_left <= 0:
+            self.dash_dir = (wx / n, wz / n) if n > 1e-9 else self.face
+            self.dash_left = ticks(T["dash_duration_s"])
+            self.dash_cd = 0 if self.charm > 0 else ticks(T["dash_cooldown_s"])
+            ev("dash", {})
+        dashing = self.dash_left > 0
+        if dashing:
+            self.vx, self.vz, self.vy = self.dash_dir[0] * T["dash_speed"], self.dash_dir[1] * T["dash_speed"], 0.0
+            self.dash_left -= 1
+        elif self.launched:
+            self.vx, self.vz = self.launch_v
+        else:
+            a = speed * DT / T["accel_s"]
+            for attr, t in (("vx", tvx), ("vz", tvz)):
+                v = getattr(self, attr)
+                setattr(self, attr, v + max(-a, min(a, t - v)))
+        # horizontal with wall / tower blocking
+        x, y, z = self.pos
+        nx, nz = x + self.vx * DT, z + self.vz * DT
+        if not self.walk_ok(nx, nz, y):
+            if self.walk_ok(nx, z, y):
+                nz, self.vz = z, 0.0
+            elif self.walk_ok(x, nz, y):
+                nx, self.vx = x, 0.0
+            else:
+                nx, nz, self.vx, self.vz = x, z, 0.0, 0.0
+        self.pos[0], self.pos[2] = nx, nz
+        # pads
+        if not self.launched:
+            for p in self.M["pads"]:
+                if math.hypot(nx - p["pos"][0], nz - p["pos"][2]) <= p["r"] and abs(y - p["pos"][1]) <= 0.5:
+                    if "dir" in p:
+                        ux, uz = p["dir"]
+                    else:
+                        ux, uz = p["to"][0] - p["pos"][0], p["to"][1] - p["pos"][2]
+                    k = math.hypot(ux, uz) or 1.0
+                    self.launch_v = (ux / k * p["vh"], uz / k * p["vh"])
+                    self.vx, self.vz = self.launch_v
+                    self.vy, self.grounded, self.launched = float(p["vy"]), False, True
+                    break
+        # wind
+        if self.wind_on:
+            self._wind_tick()
+            if self.wind["active"]:
+                a = math.radians(self.wind["dir"])
+                wx2, wz2 = self.pos[0] + math.cos(a) * T["wind_speed"] * DT, self.pos[2] + math.sin(a) * T["wind_speed"] * DT
+                if self.walk_ok(wx2, wz2, self.pos[1]):
+                    self.pos[0], self.pos[2] = wx2, wz2
+        # vertical
+        x, z = self.pos[0], self.pos[2]
+        if not dashing and self.grounded:
+            h = self.height(x, z)
+            if h is not None and self.pos[1] - h <= T["step_up_m"]:
+                self.pos[1] = h
+            else:
+                self.grounded = False
+        if not dashing and not self.grounded:
+            self.vy -= T["gravity"] * DT
+            self.pos[1] += self.vy * DT
+            h = self.height(x, z)
+            if h is not None and self.pos[1] <= h and self.vy <= 0:
+                self.pos[1], self.vy, self.grounded, self.launched = h, 0.0, True, False
+        if self.pos[1] < T["fall_y"] and self.fall_wait == 0:
+            lost, self.carried = self.carried, 0
+            self.flames -= 1
+            self.fall_wait = T["fall_wait_ticks"]
+            self.vx = self.vy = self.vz = 0.0
+            self.launched = False
+            self.dash_left = 0
+            ev("player_hit", {"by": "fall", "flames": self.flames, "dropped": 0, "lost": lost})
+
+    def _wind_tick(self):
+        T, w, t = self.T, self.wind, self.sim_tick
+        if not w["active"] and t == w["next"] - ticks(T["wind_warn_s"]):
+            w["dir"], w["warn"] = r3(self.rnd() * 360.0), True
+        if not w["active"] and t == w["next"]:
+            w["active"], w["warn"], w["end"] = True, False, t + ticks(T["wind_duration_s"])
+        elif w["active"] and t >= w["end"]:
+            w["active"] = False
+            w["next"] += ticks(T["wind_every_s"])
+
+    # ---- stage 4
+    def _pickups(self, ev):
+        T = self.T
         keep = []
         for m in self.motes:
-            if self.carried < T["carry_capacity"] and math.hypot(m["pos"][0] - self.pos[0], m["pos"][2] - self.pos[2]) <= T["pickup_radius"]:
+            if self.carried < T["carry_capacity"] and self.xz(m["pos"], self.pos) <= T["pickup_radius"] and abs(m["pos"][1] - self.pos[1]) <= T["pickup_dy"]:
                 self.carried += 1
-                self.score += T["score"]["per_mote"]
                 ev("mote_picked", {"carried": self.carried})
             else:
                 keep.append(m)
         self.motes = keep
-        # spawns
-        if self.steps % MOTE_EVERY_TICKS == 0 and len(self.motes) < MOTE_MAX and self.random_motes:
-            self._spawn_mote()
-        t = self.steps / 60.0
-        if self.random_shades and len(self.shades) < SHADE_MAX and t >= SHADE_FIRST_S and \
-                (self.steps - round(SHADE_FIRST_S * 60)) % round(SHADE_EVERY_S * 60) == 0:
-            self._spawn_shade(ev)
-        # shades
-        lit = [l for l in self.lanterns if l["lit"]]
-        for s in self.shades:
-            if s["state"] == "stunned":
-                continue
-            dx, dz = self.pos[0] - s["pos"][0], self.pos[2] - s["pos"][2]
-            dd = math.hypot(dx, dz)
-            if dd > 1e-9:
-                st = min(T["shade_speed"] * DT, dd)
-                s["pos"][0] += dx / dd * st
-                s["pos"][2] += dz / dd * st
-        for s in self.shades:
-            for l in lit:
-                ox, oz = s["pos"][0] - l["pos"][0], s["pos"][2] - l["pos"][2]
-                od = math.hypot(ox, oz)
-                if od < T["safe_radius"]:
-                    ux, uz = (ox / od, oz / od) if od > 1e-9 else (1.0, 0.0)
-                    s["pos"][0], s["pos"][2] = l["pos"][0] + ux * T["safe_radius"], l["pos"][2] + uz * T["safe_radius"]
-        # hit
-        if self.invuln <= 0:
-            for s in self.shades:
-                if s["state"] != "stunned" and math.hypot(s["pos"][0] - self.pos[0], s["pos"][2] - self.pos[2]) <= T["shade_hit_radius"]:
-                    drop = int(self.carried * T["hit_drop_ratio"])
-                    self.carried -= drop
-                    self.flames -= 1
-                    self.invuln = T["invuln_s"]
-                    ev("player_hit", {"by": "shade", "flames": self.flames, "dropped": drop})
-                    if self.flames <= 0:
-                        self._end(ev, "lost", "no_flames")
-                        return evs
-                    break
-        # dawn
-        if self.time_left() <= 0:
-            self._end(ev, "lost", "dawn")
-        return evs
+        for c in self.charms:
+            if c["available"] and self.xz(c["pos"], self.pos) <= T["pickup_radius"] and abs(c["pos"][1] - self.pos[1]) <= T["pickup_dy"]:
+                c["available"], c["respawn"] = False, T["charm_respawn_ticks"]
+                self.charm = T["charm_ticks"]
+                ev("charm_picked", {"charm_id": c["id"], "charm_ticks": self.charm})
 
+    # ---- stage 5
     def _interact(self, ev):
         T = self.T
         best, bd = None, 1e18
         for l in self.lanterns:
             if l["lit"]:
                 continue
-            dd = math.hypot(l["pos"][0] - self.pos[0], l["pos"][2] - self.pos[2])
+            dd = self.xz(l["pos"], self.pos)
             if dd <= T["interact_radius"] and dd < bd:
                 best, bd = l, dd
         if not best or self.carried <= 0:
@@ -272,27 +445,234 @@ class Sim:
             return
         self.carried -= amt
         best["deposited"] += amt
+        self.score += T["score"]["per_mote"] * amt
         ev("deposit", {"lantern_id": best["id"], "amount": amt, "deposited": best["deposited"]})
         if best["deposited"] >= T["lantern_cost"]:
             best["lit"] = True
             self.score += T["score"]["per_lantern"]
             ev("lantern_lit", {"lantern_id": best["id"]})
-            if all(l["lit"] for l in self.lanterns):
-                self._end(ev, "won", "all_lit")
+            for s in self.shades:
+                if self.xz(s["pos"], best["pos"]) < T["safe_radius"]:
+                    s["eject"], s["ec"] = T["eject_ticks"], best["pos"]
+
+    # ---- stage 6
+    def _eject(self):
+        r = self.T["safe_radius"]
+        for s in self.shades:
+            if s["eject"] > 0:
+                c = s["ec"]
+                dx, dz = s["pos"][0] - c[0], s["pos"][2] - c[2]
+                d = math.hypot(dx, dz)
+                ux, uz = (dx / d, dz / d) if d > 1e-9 else (1.0, 0.0)
+                step = max(0.0, r - d) / s["eject"]
+                s["pos"][0] += ux * step
+                s["pos"][2] += uz * step
+                s["eject"] -= 1
+
+    # ---- stage 7
+    def _pulse(self, ev):
+        T = self.T
+        self.carried -= T["pulse_cost"]
+        self.pulse_cd = ticks(T["pulse_cooldown_s"])
+        cx, cy, cz = self.pos[0], self.pos[1] + T["pulse_center_dy"], self.pos[2]
+        hit = []
+        for s in self.shades:
+            dx, dz = s["pos"][0] - cx, s["pos"][2] - cz
+            if math.sqrt(dx * dx + dz * dz + (s["pos"][1] - cy) ** 2) <= T["pulse_radius"]:
+                dd = math.hypot(dx, dz)
+                s["state"], s["left"], s["push"] = "stunned", T["pulse_stun_ticks"], T["pulse_push_ticks"]
+                s["dir"] = (dx / dd, dz / dd) if dd > 1e-9 else (1.0, 0.0)
+                self.score += T["score"]["per_stun"]
+                hit.append(s["id"])
+        for d in self.drifters:
+            if math.dist(d["pos"], (cx, cy, cz)) <= T["pulse_radius"]:
+                if d["state"] == "chase":
+                    d["state"], d["left"] = "flee", T["drifter_flee_ticks"]
+                elif d["state"] == "flee" and d["stolen"] > 0:
+                    for i in range(d["stolen"]):
+                        self._add_mote([d["pos"][0] + 0.3 * i, self.height(d["pos"][0], d["pos"][2]) or 0.0, d["pos"][2]], "dropped", T["mote_drop_ttl_ticks"], None)
+                    ev("drifter_drop", {"drifter_id": d["id"], "amount": d["stolen"]})
+                    d["stolen"], d["left"] = 0, min(d["left"], T["drifter_drop_vanish_ticks"])
+        ev("pulse", {"stunned_ids": hit})
+
+    # ---- stage 8
+    def _shade_move(self, s, dx, dz):
+        """Move a shade by (dx, dz) if the target has ground; slide along axes; return True if moved."""
+        x, z = s["pos"][0], s["pos"][2]
+        ok = lambda a, b: self.height(a, b) is not None and not self.in_tower(a, b, 0.0)
+        for ax, az in ((dx, dz), (dx, 0.0), (0.0, dz)):
+            if (ax or az) and ok(x + ax, z + az):
+                s["pos"][0], s["pos"][2] = x + ax, z + az
+                return True
+        return False
+
+    def _move_shades(self):
+        T = self.T
+        speed = T["shade_speed_night3"] if self.night == 3 else T["shade_speed"]
+        lit = [l for l in self.lanterns if l["lit"]]
+        for s in self.shades:
+            px, pz = self.pos[0] - s["pos"][0], self.pos[2] - s["pos"][2]
+            d = math.hypot(px, pz)
+            st = s["state"]
+            if st == "spawning":
+                st = s["state"] = "chase" if d <= T["shade_detect_m"] else "wander"
+            if s["eject"] > 0:
+                pass
+            elif st == "stunned":
+                if s["push"] > 0:
+                    k = T["pulse_push_m"] / T["pulse_push_ticks"]
+                    if not self._shade_move(s, s["dir"][0] * k, s["dir"][1] * k):
+                        s["push"] = 0
+                    else:
+                        s["push"] -= 1
+            elif st == "recoil":
+                self._shade_move(s, s["dir"][0] * T["recoil_m"] / T["recoil_ticks"], s["dir"][1] * T["recoil_m"] / T["recoil_ticks"])
+                s["left"] -= 1
+                if s["left"] <= 0:
+                    s["state"] = "chase"
+            else:
+                if st == "wander" and d <= T["shade_detect_m"]:
+                    st = s["state"] = "chase"
+                elif st == "chase" and d > T["shade_lose_m"]:
+                    st = s["state"] = "wander"
+                if st == "chase" and d > 1e-9:
+                    k = min(speed * DT, d)
+                    self._shade_move(s, px / d * k, pz / d * k)
+                elif st == "wander":
+                    if s["turn"] <= 0:
+                        a = self.rnd() * math.tau
+                        s["dir"], s["turn"] = (math.cos(a), math.sin(a)), T["shade_wander_turn_ticks"]
+                    s["turn"] -= 1
+                    k = T["shade_wander_speed"] * DT
+                    if not self._shade_move(s, s["dir"][0] * k, s["dir"][1] * k):
+                        s["turn"] = 0
+            if s["eject"] <= 0:   # lit lanterns block shades at the safe-zone edge
+                for l in lit:
+                    ox, oz = s["pos"][0] - l["pos"][0], s["pos"][2] - l["pos"][2]
+                    od = math.hypot(ox, oz)
+                    if od < T["safe_radius"]:
+                        ux, uz = (ox / od, oz / od) if od > 1e-9 else (1.0, 0.0)
+                        s["pos"][0], s["pos"][2] = l["pos"][0] + ux * T["safe_radius"], l["pos"][2] + uz * T["safe_radius"]
+            h = self.height(s["pos"][0], s["pos"][2])
+            s["pos"][1] = h if h is not None else s["pos"][1]
+
+    def _move_drifters(self):
+        T = self.T
+        keep = []
+        for d in self.drifters:
+            dx, dy, dz = self.pos[0] - d["pos"][0], self.pos[1] - d["pos"][1], self.pos[2] - d["pos"][2]
+            dxz = math.hypot(dx, dz)
+            near = self.carried >= T["drifter_need_carried"] and dxz <= T["drifter_chase_m"]
+            if d["state"] == "idle" and near:
+                d["state"] = "chase"
+            elif d["state"] == "chase" and not near:
+                d["state"] = "idle"
+            k = T["drifter_speed"] * DT
+            if d["state"] == "chase":
+                n3 = math.sqrt(dx * dx + dy * dy + dz * dz) or 1.0
+                step = min(k, n3)
+                d["pos"][0] += dx / n3 * step; d["pos"][1] += dy / n3 * step; d["pos"][2] += dz / n3 * step
+            elif d["state"] == "flee":
+                if dxz > 1e-9:
+                    d["pos"][0] -= dx / dxz * k
+                    d["pos"][2] -= dz / dxz * k
+                else:
+                    d["pos"][0] += k
+                d["left"] -= 1
+                if d["left"] <= 0:
+                    continue   # removed, taking what it stole
+            else:
+                if d["turn"] <= 0:
+                    a = self.rnd() * math.tau
+                    d["dir"], d["turn"] = (math.cos(a), math.sin(a)), T["shade_wander_turn_ticks"]
+                d["turn"] -= 1
+                if self.height(d["pos"][0], d["pos"][2]) is None:   # drifted over the sea: turn back to the island
+                    cx, cz = self.M["center"][0] - d["pos"][0], self.M["center"][1] - d["pos"][2]
+                    cn = math.hypot(cx, cz) or 1.0
+                    d["dir"] = (cx / cn, cz / cn)
+                d["pos"][0] += d["dir"][0] * T["drifter_idle_speed"] * DT
+                d["pos"][2] += d["dir"][1] * T["drifter_idle_speed"] * DT
+            keep.append(d)
+        self.drifters = keep
+
+    # ---- stage 9
+    def _contact(self, ev):
+        T = self.T
+        for d in self.drifters:
+            if d["state"] == "chase" and d["stolen"] == 0 and self.carried > 0 and self.xz(d["pos"], self.pos) <= T["drifter_steal_radius"]:
+                amt = min(T["drifter_steal"], self.carried)
+                self.carried -= amt
+                d["stolen"], d["state"], d["left"] = amt, "flee", T["drifter_flee_ticks"]
+                ev("drifter_steal", {"drifter_id": d["id"], "amount": amt, "carried": self.carried})
+        if self.invuln > 0:
+            return
+        for s in self.shades:
+            if s["state"] in ("chase", "wander") and s["eject"] <= 0 and self.xz(s["pos"], self.pos) <= T["shade_hit_radius"] \
+                    and abs(s["pos"][1] - self.pos[1]) <= T["shade_hit_dy"]:
+                n = int(self.carried * T["hit_drop_ratio"])
+                self.carried -= n
+                for i in range(n):
+                    a = (i + self.rnd() * 0.8) / max(n, 1) * math.tau
+                    r = T["drop_ring_min"] + self.rnd() * (T["drop_ring_max"] - T["drop_ring_min"])
+                    x, z = self.pos[0] + r * math.cos(a), self.pos[2] + r * math.sin(a)
+                    h = self.height(x, z)
+                    self._add_mote([x, self.pos[1] if h is None else h, z], "dropped", T["mote_drop_ttl_ticks"], None)
+                self.flames -= 1
+                self.invuln = T["invuln_ticks"]
+                dx, dz = s["pos"][0] - self.pos[0], s["pos"][2] - self.pos[2]
+                dd = math.hypot(dx, dz)
+                s["state"], s["left"], s["dir"] = "recoil", T["recoil_ticks"], ((dx / dd, dz / dd) if dd > 1e-9 else (1.0, 0.0))
+                ev("player_hit", {"by": "shade", "flames": self.flames, "dropped": n})
+                break
+
+    # ---- stage 10
+    def _spawns(self, ev):
+        T, M, t = self.T, self.M, self.sim_tick
+        if self.random_motes and t % T["mote_spawn_every_ticks"] == 0 and len(self.motes) < T["mote_max"]:
+            used = {m["idx"] for m in self.motes}
+            free = [i for i in range(len(self.mote_pts)) if i not in used]
+            if free:
+                i = free[int(self.rnd() * len(free))]
+                self._add_mote(list(self.mote_pts[i]), "random", None, i)
+        if self.random_shades:
+            first = T["shade_first_tick"]
+            count = T["shade_first_count"] if t == first else 1 if t > first and (t - first) % M["shade_every_ticks"] == 0 else 0
+            for _ in range(count):
+                if len(self.shades) >= M["shade_max"]:
+                    break
+                valid = [p for p in self.shade_pts if self.xz(p, self.pos) >= T["shade_spawn_min_dist"]
+                         and all(self.xz(p, s["pos"]) > 1.0 for s in self.shades)]
+                if not valid:
+                    break
+                s = self._new_shade(None, list(valid[int(self.rnd() * len(valid))]), "spawning")
+                self.shades.append(s)
+                ev("shade_spawned", {"id": s["id"]})
+        if self.random_drifters and t % T["drifter_every_ticks"] == 0 and len(self.drifters) < T["drifter_max"]:
+            p = self.shade_pts[int(self.rnd() * len(self.shade_pts))]
+            self.drifters.append(self._new_drifter(None, [p[0], p[1] + 1.0, p[2]], "idle", 0, 0))
 
     def _end(self, ev, result, reason):
         if result == "won":
-            self.score += self.T["score"]["per_second_left"] * int(self.time_left()) + self.T["score"]["per_flame_left"] * self.flames
+            self.score += self.T["score"]["per_second_left"] * (self.left_ticks() // 60) + self.T["score"]["per_flame_left"] * self.flames
         self.state = result
         ev("game_over", {"result": result, "reason": reason})
 
     # ---- output
     def snapshot(self):
-        return {"type": "snapshot", "tick": self.steps, "sim_tick": self.steps, "state": self.state,
-                "time_left_s": r3(self.time_left()), "score": self.score,
-                "player": {"pos": [r3(v) for v in self.pos], "flames": self.flames, "carried": self.carried},
+        T = self.T
+        state = "paused" if self.paused and self.state == "playing" else self.state
+        w = self.wind
+        return {"type": "snapshot", "tick": self.tick, "sim_tick": self.sim_tick, "state": state, "night": self.night,
+                "time_left_s": r3(self.left_ticks() / 60), "score": self.score,
+                "wind": {"active": w["active"], "dir_deg": w["dir"], "warning": w["warn"]},
+                "player": {"pos": [r3(v) for v in self.pos], "vel": [r3(self.vx), r3(self.vy), r3(self.vz)],
+                           "flames": self.flames, "carried": self.carried, "grounded": self.grounded, "invuln": self.invuln > 0,
+                           "dash_cd_s": r3(self.dash_cd / 60), "pulse_cd_s": r3(self.pulse_cd / 60), "charm_s": r3(self.charm / 60),
+                           "facing": [r3(self.face[0]), r3(self.face[1])]},
                 "lanterns": [{"id": l["id"], "pos": [r3(v) for v in l["pos"]], "lit": l["lit"], "deposited": l["deposited"]} for l in self.lanterns],
-                "shades": [{"id": s["id"], "pos": [r3(v) for v in s["pos"]], "state": s["state"]} for s in self.shades],
+                "shades": [{"id": s["id"], "pos": [r3(v) for v in s["pos"]], "state": s["state"], "state_ticks_left": s["left"]} for s in self.shades],
                 "motes_active": len(self.motes),
-                "motes": [{"id": m["id"], "pos": [r3(v) for v in m["pos"]]} for m in self.motes]}
-
+                "motes": [{"id": m["id"], "pos": [r3(v) for v in m["pos"]], "kind": m["kind"],
+                           "ttl_s": None if m["ttl"] is None else r3(m["ttl"] / 60)} for m in self.motes],
+                "drifters": [{"id": d["id"], "pos": [r3(v) for v in d["pos"]], "state": d["state"], "stolen": d["stolen"]} for d in self.drifters],
+                "charms": [{"id": c["id"], "pos": [r3(v) for v in c["pos"]], "available": c["available"], "respawn_s": r3(c["respawn"] / 60)} for c in self.charms]}

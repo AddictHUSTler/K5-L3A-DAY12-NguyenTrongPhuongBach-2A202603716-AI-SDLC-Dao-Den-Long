@@ -1,4 +1,4 @@
-"""Headless runner per Test Contract v1.0. Usage: python3 -m game.headless --seed 1 --night 1 --ticks 600 --out out.jsonl"""
+"""Headless runner per Test Contract v1.1. Usage: python3 -m game.headless --seed 1 --night 1 --ticks 600 --out out.jsonl"""
 import argparse, json, sys
 from .sim import Sim, ScenarioError
 
@@ -23,8 +23,8 @@ def load_frames(path):
     return frames
 
 
-def run(seed, ticks, scenario, frames, every, out):
-    sim = Sim(seed, scenario)
+def run(seed, ticks, scenario, frames, every, out, night=1):
+    sim = Sim(seed, scenario, night=night)
     w = lambda o: out.write(json.dumps(o, separators=(",", ":")) + "\n")
     w(sim.snapshot())
     fi = 0
@@ -33,14 +33,14 @@ def run(seed, ticks, scenario, frames, every, out):
             sim.set_inputs(frames[fi])
             fi += 1
         for name, data in sim.step():
-            w({"type": "event", "tick": sim.steps, "name": name, "data": data})
+            w({"type": "event", "tick": sim.tick, "name": name, "data": data})
         if sim.state != "playing":
             break
-        if sim.steps % every == 0:
+        if sim.tick % every == 0:
             w(sim.snapshot())
-    if sim.steps % every != 0 or sim.state != "playing":
+    if sim.tick % every != 0 or sim.state != "playing":
         w(sim.snapshot())
-    w({"type": "end", "ticks": sim.steps, "state": sim.state, "score": sim.score})
+    w({"type": "end", "ticks": sim.tick, "state": sim.state, "score": sim.score})
 
 
 def main(argv=None):
@@ -57,7 +57,7 @@ def main(argv=None):
         scenario = load_json(a.scenario) if a.scenario else None
         frames = load_frames(a.inputs) if a.inputs else []
         with open(a.out, "w") as out:
-            run(a.seed, a.ticks, scenario, frames, max(1, a.snapshot_every), out)
+            run(a.seed, a.ticks, scenario, frames, max(1, a.snapshot_every), out, a.night)
     except ScenarioError as e:
         print(f"error: {e}", file=sys.stderr)
         return 2

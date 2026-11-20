@@ -1,30 +1,532 @@
 {
-  "contract_version": "1.0",
-  "team": "2A202603716-NguyenTrongPhuongBach",
-  "build_cmd": "true",
-  "run_cmd": "python3 -m game.server",
-  "headless_cmd": "python3 -m game.headless",
-  "tuning": {
-    "player_speed": 6.0,
-    "carry_capacity": 6,
-    "lantern_cost": 6,
-    "lantern_count_night1": 5,
-    "pickup_radius": 1.5,
-    "interact_radius": 3.0,
-    "pulse_cost": 2,
-    "pulse_radius": 6.5,
-    "night1_duration_s": 420,
-    "flames": 3,
-    "invuln_s": 1.6,
-    "hit_drop_ratio": 0.5,
-    "pulse_stun_s": 2.6,
-    "pulse_push_m": 4.5,
-    "pulse_cooldown_s": 2.8,
-    "safe_radius": 8.0,
-    "shade_speed": 3.4,
-    "shade_hit_radius": 1.4,
-    "fall_enabled": false,
-    "score": { "per_mote": 10, "per_lantern": 200, "per_stun": 25,
-               "per_second_left": 2, "per_flame_left": 100 }
+ "contract_version": "1.1",
+ "team": "2A202603716-NguyenTrongPhuongBach",
+ "build_cmd": "true",
+ "run_cmd": "python3 -m game.server",
+ "headless_cmd": "python3 -m game.headless",
+ "tuning": {
+  "player_speed": 6.0,
+  "accel_s": 0.1,
+  "jump_speed": 7.0,
+  "gravity": 20.0,
+  "step_up_m": 0.5,
+  "fall_y": -10.0,
+  "dash_speed": 14.0,
+  "dash_duration_s": 0.2,
+  "dash_cooldown_s": 1.5,
+  "carry_capacity": 10,
+  "pickup_radius": 1.0,
+  "pickup_dy": 1.5,
+  "mote_initial": 20,
+  "mote_max": 30,
+  "mote_spawn_every_ticks": 240,
+  "mote_drop_ttl_ticks": 480,
+  "drop_ring_min": 1.5,
+  "drop_ring_max": 2.5,
+  "lantern_cost": 10,
+  "interact_radius": 2.0,
+  "safe_radius": 6.0,
+  "eject_ticks": 30,
+  "pulse_cost": 3,
+  "pulse_radius": 5.0,
+  "pulse_cooldown_s": 3.0,
+  "pulse_center_dy": 0.8,
+  "pulse_stun_ticks": 120,
+  "pulse_push_ticks": 15,
+  "pulse_push_m": 4.0,
+  "shade_speed": 4.0,
+  "shade_speed_night3": 4.5,
+  "shade_wander_speed": 2.0,
+  "shade_wander_turn_ticks": 120,
+  "shade_detect_m": 12.0,
+  "shade_lose_m": 18.0,
+  "shade_hit_radius": 1.0,
+  "shade_hit_dy": 1.5,
+  "recoil_m": 2.0,
+  "recoil_ticks": 60,
+  "shade_first_tick": 300,
+  "shade_first_count": 2,
+  "shade_spawn_min_dist": 15.0,
+  "hit_drop_ratio": 0.5,
+  "invuln_ticks": 90,
+  "fall_wait_ticks": 60,
+  "flames": 3,
+  "night1_duration_s": 300,
+  "night2_duration_s": 330,
+  "night3_duration_s": 360,
+  "drifter_speed": 7.0,
+  "drifter_idle_speed": 2.0,
+  "drifter_max": 2,
+  "drifter_every_ticks": 1200,
+  "drifter_need_carried": 5,
+  "drifter_chase_m": 15.0,
+  "drifter_steal_radius": 1.2,
+  "drifter_steal": 3,
+  "drifter_flee_ticks": 240,
+  "drifter_drop_vanish_ticks": 120,
+  "charm_ticks": 600,
+  "charm_speed": 7.2,
+  "charm_respawn_ticks": 2700,
+  "wind_every_s": 30,
+  "wind_duration_s": 5,
+  "wind_warn_s": 2,
+  "wind_speed": 2.0,
+  "ambient_base": 0.15,
+  "ambient_gain": 0.55,
+  "score": {
+   "per_mote": 10,
+   "per_lantern": 100,
+   "per_stun": 5,
+   "per_second_left": 2,
+   "per_flame_left": 50
   }
+ },
+ "maps": {
+  "1": {
+   "duration_key": "night1_duration_s",
+   "shade_every_ticks": 480,
+   "shade_max": 6,
+   "start": [
+    0,
+    0,
+    0
+   ],
+   "center": [
+    0,
+    0
+   ],
+   "discs": [
+    {
+     "c": [
+      0,
+      0
+     ],
+     "r": 40,
+     "y": 0
+    }
+   ],
+   "lanterns": [
+    [
+     0,
+     0,
+     25
+    ],
+    [
+     23.8,
+     0,
+     7.7
+    ],
+    [
+     14.7,
+     0,
+     -20.2
+    ],
+    [
+     -14.7,
+     0,
+     -20.2
+    ],
+    [
+     -23.8,
+     0,
+     7.7
+    ]
+   ],
+   "mote_rings": [
+    {
+     "c": [
+      0,
+      0
+     ],
+     "r": 12,
+     "n": 8,
+     "start": 0,
+     "step": 45,
+     "y": 0
+    },
+    {
+     "c": [
+      0,
+      0
+     ],
+     "r": 33,
+     "n": 16,
+     "start": 0,
+     "step": 22.5,
+     "y": 0
+    }
+   ],
+   "shade_rings": [
+    {
+     "c": [
+      0,
+      0
+     ],
+     "r": 37,
+     "n": 12,
+     "start": 15,
+     "step": 30,
+     "y": 0
+    }
+   ],
+   "pads": [],
+   "charms": []
+  },
+  "2": {
+   "duration_key": "night2_duration_s",
+   "shade_every_ticks": 420,
+   "shade_max": 8,
+   "start": [
+    0,
+    0,
+    0
+   ],
+   "center": [
+    35,
+    0
+   ],
+   "discs": [
+    {
+     "c": [
+      0,
+      0
+     ],
+     "r": 28,
+     "y": 0
+    },
+    {
+     "c": [
+      70,
+      0
+     ],
+     "r": 28,
+     "y": 0
+    }
+   ],
+   "rects": [
+    {
+     "x0": 26,
+     "x1": 44,
+     "z0": -2,
+     "z1": 2,
+     "y": 0
+    }
+   ],
+   "lanterns": [
+    [
+     0,
+     0,
+     20
+    ],
+    [
+     17,
+     0,
+     -10
+    ],
+    [
+     -17,
+     0,
+     -10
+    ],
+    [
+     70,
+     0,
+     20
+    ],
+    [
+     87,
+     0,
+     -10
+    ],
+    [
+     53,
+     0,
+     -10
+    ]
+   ],
+   "mote_rings": [
+    {
+     "c": [
+      0,
+      0
+     ],
+     "r": 10,
+     "n": 4,
+     "start": 0,
+     "step": 90,
+     "y": 0
+    },
+    {
+     "c": [
+      0,
+      0
+     ],
+     "r": 22,
+     "n": 8,
+     "start": 0,
+     "step": 45,
+     "y": 0
+    },
+    {
+     "c": [
+      70,
+      0
+     ],
+     "r": 10,
+     "n": 4,
+     "start": 0,
+     "step": 90,
+     "y": 0
+    },
+    {
+     "c": [
+      70,
+      0
+     ],
+     "r": 22,
+     "n": 8,
+     "start": 0,
+     "step": 45,
+     "y": 0
+    }
+   ],
+   "shade_rings": [
+    {
+     "c": [
+      0,
+      0
+     ],
+     "r": 26,
+     "n": 8,
+     "start": 22.5,
+     "step": 45,
+     "y": 0
+    },
+    {
+     "c": [
+      70,
+      0
+     ],
+     "r": 26,
+     "n": 8,
+     "start": 22.5,
+     "step": 45,
+     "y": 0
+    }
+   ],
+   "pads": [
+    {
+     "pos": [
+      20,
+      0,
+      18
+     ],
+     "r": 1,
+     "vy": 14,
+     "vh": 24,
+     "to": [
+      70,
+      0
+     ]
+    },
+    {
+     "pos": [
+      50,
+      0,
+      -18
+     ],
+     "r": 1,
+     "vy": 14,
+     "vh": 24,
+     "to": [
+      0,
+      0
+     ]
+    }
+   ],
+   "charms": [
+    [
+     35,
+     0,
+     0
+    ]
+   ]
+  },
+  "3": {
+   "duration_key": "night3_duration_s",
+   "shade_every_ticks": 360,
+   "shade_max": 10,
+   "start": [
+    0,
+    0,
+    -15
+   ],
+   "center": [
+    0,
+    0
+   ],
+   "wind": true,
+   "tower": {
+    "r": 2,
+    "h": 8,
+    "y": 6
+   },
+   "discs": [
+    {
+     "c": [
+      0,
+      0
+     ],
+     "r": 45,
+     "y": 0
+    },
+    {
+     "c": [
+      0,
+      0
+     ],
+     "r": 8,
+     "y": 6
+    }
+   ],
+   "half_rings": [
+    {
+     "r0": 12,
+     "r1": 24,
+     "y": 3
+    }
+   ],
+   "ramps": [
+    {
+     "deg": 30,
+     "w": 3,
+     "r0": 24,
+     "r1": 30,
+     "y0": 3,
+     "y1": 0
+    },
+    {
+     "deg": 150,
+     "w": 3,
+     "r0": 24,
+     "r1": 30,
+     "y0": 3,
+     "y1": 0
+    }
+   ],
+   "lanterns": [
+    [
+     0,
+     6,
+     6
+    ],
+    [
+     18,
+     3,
+     10
+    ],
+    [
+     -18,
+     3,
+     10
+    ],
+    [
+     35,
+     0,
+     -10
+    ],
+    [
+     -35,
+     0,
+     -10
+    ],
+    [
+     20,
+     0,
+     -35
+    ],
+    [
+     -20,
+     0,
+     -35
+    ]
+   ],
+   "mote_rings": [
+    {
+     "c": [
+      0,
+      0
+     ],
+     "r": 34,
+     "n": 18,
+     "start": 0,
+     "step": 20,
+     "y": 0
+    },
+    {
+     "c": [
+      0,
+      0
+     ],
+     "r": 18,
+     "n": 8,
+     "start": 20,
+     "step": 20,
+     "y": 3
+    },
+    {
+     "c": [
+      0,
+      0
+     ],
+     "r": 5,
+     "n": 4,
+     "start": 45,
+     "step": 90,
+     "y": 6
+    }
+   ],
+   "shade_rings": [
+    {
+     "c": [
+      0,
+      0
+     ],
+     "r": 43,
+     "n": 16,
+     "start": 0,
+     "step": 22.5,
+     "y": 0
+    }
+   ],
+   "pads": [
+    {
+     "pos": [
+      0,
+      3,
+      13
+     ],
+     "r": 1,
+     "vy": 12,
+     "vh": 8,
+     "dir": [
+      0,
+      -1
+     ]
+    }
+   ],
+   "charms": [
+    [
+     30,
+     0,
+     25
+    ],
+    [
+     -30,
+     0,
+     25
+    ]
+   ]
+  }
+ }
 }
