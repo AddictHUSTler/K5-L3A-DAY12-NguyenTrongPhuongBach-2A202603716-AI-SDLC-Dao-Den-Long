@@ -13,7 +13,7 @@ Controls: WASD move, Space jump, E deposit light into a lantern, Q pulse (costs 
 Scoring: +10 per light picked, +200 per lantern lit, +25 per Shade stunned; on a win, +2 per second left and +100 per flame left. All numbers: `game.contract.json`. Assumptions: `docs/notes/assumptions.md`. Evidence: `docs/proof/`.
 
 ## Sáng tạo của tôi
-_(none yet)_
+**Lantern chime.** Lighting a lantern rings a note; each lantern is one step higher on a pentatonic scale, so lighting them all plays a rising tune. Browser-only (`web/index.html`, driven by the existing `lantern_lit` event); `game/` is untouched, so headless output is identical. Evidence: `./scripts/test.sh` still passes and `git diff phase-1 -- game` is empty.
 
 ---
 

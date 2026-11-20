@@ -28,6 +28,8 @@ const keys = {}; let yaw = 0, last = performance.now(), state = "playing", busy 
 addEventListener("keydown", e => { keys[e.code] = true; if (e.code === "KeyR") reset(); });
 addEventListener("keyup", e => keys[e.code] = false);
 addEventListener("resize", () => { R.setSize(innerWidth, innerHeight); cam.aspect = innerWidth/innerHeight; cam.updateProjectionMatrix(); });
+let ac; // creative: each lit lantern rings a chime one step higher on a pentatonic scale
+function chime(n) { try { ac ??= new AudioContext(); const o = ac.createOscillator(), g = ac.createGain(); o.frequency.value = 392 * 2 ** ([0,2,4,7,9][n % 5] / 12 + Math.floor(n / 5)); g.gain.setValueAtTime(.2, ac.currentTime); g.gain.exponentialRampToValueAtTime(.001, ac.currentTime + 1.2); o.connect(g).connect(ac.destination); o.start(); o.stop(ac.currentTime + 1.2); } catch(e) {} }
 const post = (p, b) => fetch(p, {method:"POST", body:JSON.stringify(b)}).then(r => r.json());
 function draw(s) {
   state = s.state; player.position.set(...s.player.pos);
@@ -42,6 +44,7 @@ function draw(s) {
   cam.position.set(s.player.pos[0] - Math.sin(yaw)*12, 8, s.player.pos[2] - Math.cos(yaw)*12); cam.lookAt(player.position.x, 1.5, player.position.z);
 }
 async function reset() { draw((await post("/reset", {})).snap); }
+const onEvents = (ev, snap) => { if (ev.some(e => e.name === "lantern_lit")) chime(snap.lanterns.filter(l => l.lit).length - 1); };
 async function loop(now) {
   const steps = Math.min(Math.round((now - last) * 0.06), 6); last = now;
   if (keys.ArrowLeft) yaw += .03; if (keys.ArrowRight) yaw -= .03;
@@ -49,7 +52,7 @@ async function loop(now) {
     busy = true;
     const x = (keys.KeyD?1:0) - (keys.KeyA?1:0), z = (keys.KeyW?1:0) - (keys.KeyS?1:0);
     const inputs = {move:[x,z], cam_yaw_deg: yaw*180/Math.PI, jump: !!keys.Space, interact: !!keys.KeyE, pulse: !!keys.KeyQ};
-    try { draw((await post("/step", {inputs, steps})).snap); } catch(e) {}
+    try { const r = await post("/step", {inputs, steps}); draw(r.snap); onEvents(r.events, r.snap); } catch(e) {}
     busy = false;
   }
   R.render(scene, cam); requestAnimationFrame(loop);
