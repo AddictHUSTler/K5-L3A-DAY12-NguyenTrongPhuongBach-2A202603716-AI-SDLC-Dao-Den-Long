@@ -9,7 +9,7 @@ sim = Sim(random.randrange(1 << 30))
 
 # Browser play is tuned easier and faster than the contract numbers (headless/contract are untouched).
 PLAY_S = {1: 150, 2: 170, 3: 190}
-PLAY_T = dict(load_tuning(), flames=5, drain_per_s=2, mote_spawn_every_ticks=120, shade_first_tick=900)
+PLAY_T = dict(load_tuning(), flames=5, drain_per_s=2, fuel_decay_per_s=0, mote_spawn_every_ticks=120, shade_first_tick=900)
 
 
 def new(night):

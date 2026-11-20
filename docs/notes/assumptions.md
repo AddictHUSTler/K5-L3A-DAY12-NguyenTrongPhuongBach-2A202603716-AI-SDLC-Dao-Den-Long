@@ -53,4 +53,4 @@ Assumptions made in Phase 3:
 - `fuel_drain` is emitted every 60 ticks of continuous draining per shade (counter resets on leaving drain).
 - Extra tuning keys (not in the ticket): `capacity_per_light` 2, `drain_reach_m` 2, `drain_detect_m` 6, score keys `relight`, `stun_drain`, `dawn_lantern`, `dawn_flame`. Removed: `per_second_left`, `per_flame_left`.
 - Total lanterns for the 60% rule = lanterns in the sim (scenario-added ones count).
-- Browser play (`game/server.py`, not headless) is permanently easier and faster: 150/170/190 s, 5 flames, drain 2/s, motes every 120 ticks, first Shade at tick 900. Playtest feedback; contract numbers still apply to headless.
+- Browser play (`game/server.py`, not headless) is permanently easier and faster: 150/170/190 s, 5 flames, no passive fuel decay (only Shades drain), drain 2/s, motes every 120 ticks, first Shade at tick 900. Playtest feedback; contract numbers still apply to headless.
