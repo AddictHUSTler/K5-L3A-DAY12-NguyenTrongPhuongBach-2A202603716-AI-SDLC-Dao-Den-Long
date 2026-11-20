@@ -28,7 +28,7 @@ class T(unittest.TestCase):
     def test_pickup_deposit_light(self):
         ev = events(run("pick_and_light.json", "pick_and_light.inputs.json", ticks=200))
         self.assertEqual([e for e in ev if e[0] == "mote_picked"][-1][1]["carried"], 10)
-        self.assertIn(("lantern_lit", {"lantern_id": "L1"}), ev)
+        self.assertIn(("lantern_lit", {"lantern_id": "L1", "relight": False}), ev)   # v1.2: relight flag added
 
     def test_pulse_stuns_shade_and_costs_light(self):
         lines = run("pulse.json", "pulse.inputs.json", ticks=5)
@@ -48,11 +48,11 @@ class T(unittest.TestCase):
         s = sim(time_left_s=1); go(s, 60)
         self.assertEqual(s.state, "lost")
 
-    def test_win_when_all_lit(self):
+    def test_lighting_all_does_not_end_night(self):   # v1.2 replaces test_win_when_all_lit (no early win)
         s = sim(player={"carried": 10}, lanterns=[{"id": f"L{i}", "lit": True} for i in (2, 3, 4, 5)] + [{"id": "L1", "pos": [0, 0, 1]}])
         ev = go(s, 1, interact=True)
-        self.assertEqual(ev[-1], ("game_over", {"result": "won", "reason": "all_lit"}))
-        self.assertEqual(s.score, 100 + 100 + 299 * 2 + 50 * 3)   # 10 motes + lantern + floor(299 s) * 2 + 3 flames * 50
+        self.assertEqual((s.state, s.score, s.successful_lights), ("playing", 50 + 100, 1))   # 10 x 5 + first light 100
+        self.assertEqual(ev[-1], ("lantern_lit", {"lantern_id": "L1", "relight": False}))
 
     def test_scenario_setup_gives_no_score(self):
         self.assertEqual(Sim(1, {"lanterns": [{"id": "L1", "lit": True}]}).score, 0)
@@ -76,7 +76,7 @@ class T(unittest.TestCase):
         T_ = load_tuning()
         for k, v in dict(player_speed=6.0, jump_speed=7.0, gravity=20.0, dash_speed=14.0, dash_duration_s=0.2, dash_cooldown_s=1.5,
                          carry_capacity=10, lantern_cost=10, pulse_cost=3, pulse_radius=5.0, safe_radius=6.0,
-                         night1_duration_s=300, night2_duration_s=330, night3_duration_s=360).items():
+                         night1_duration_s=240, night2_duration_s=270, night3_duration_s=300).items():
             self.assertEqual(T_[k], v, k)
 
     def test_run_speed_and_stop(self):
@@ -123,7 +123,7 @@ class T(unittest.TestCase):
 
     def test_night_maps(self):
         self.assertEqual([len(sim(n).lanterns) for n in (1, 2, 3)], [5, 6, 7])
-        self.assertEqual([sim(n).left_ticks() for n in (1, 2, 3)], [18000, 19800, 21600])
+        self.assertEqual([sim(n).left_ticks() for n in (1, 2, 3)], [14400, 16200, 18000])
         self.assertEqual(len(Sim(1, night=3).motes), 20)
 
     def test_night3_wall_blocks_tier1_and_ramp_climbs(self):
@@ -209,6 +209,114 @@ class T(unittest.TestCase):
     def test_night_runs_fast(self):
         t = time.time(); headless.run(1, 21600, None, [], 10, io.StringIO(), 3)
         self.assertLess(time.time() - t, 30)
+
+    # ---- Phase 3 (contract v1.2)
+    def test_v12_numbers(self):
+        from game.sim import load_contract
+        c = load_contract(); self.assertEqual(c["contract_version"], "1.2")
+        for k, v in dict(fuel_max=100, fuel_decay_per_s=1.0, fuel_per_mote=10, relight_cost=5, win_ratio=0.6, drain_per_s=5, low_fuel_threshold=30, capacity_max=20).items():
+            self.assertEqual(c["tuning"][k], v, k)
+
+    def test_fuel_decay_and_lit_default(self):
+        s = sim(lanterns=[{"id": "L1", "lit": True}]); self.assertEqual(s.snapshot()["lanterns"][0]["fuel"], 100.0)
+        go(s, 60); self.assertEqual(s.snapshot()["lanterns"][0]["fuel"], 99.0)
+        self.assertEqual(s.snapshot()["lanterns"][1]["fuel"], 0.0)
+
+    def test_out_at_zero_then_relight_costs_5(self):
+        s = sim(player={"pos": [0, 0, 24], "carried": 12}, lanterns=[{"id": "L1", "lit": True, "fuel": 0.05}])
+        ev = go(s, 3); self.assertIn(("lantern_out", {"lantern_id": "L1"}), ev)
+        L = s.lanterns[0]; self.assertEqual((L["lit"], L["deposited"], L["ever_lit"]), (False, 0, True))
+        ev = go(s, 1, interact=True)
+        self.assertEqual(s.carried, 7); self.assertIn(("lantern_lit", {"lantern_id": "L1", "relight": True}), ev)
+        self.assertEqual((s.score, s.lanterns[0]["relit"], s.successful_lights), (25 + 40, 1, 1)); self.assertEqual(s.capacity(), 12)
+
+    def test_refuel_amounts_and_full_lantern_ignored(self):
+        s = sim(player={"pos": [0, 0, 24], "carried": 10}, lanterns=[{"id": "L1", "lit": True, "fuel": 45.0}])
+        ev = go(s, 1, interact=True)   # fuel 45 - 1/60: need ceil(55.017/10) = 6 motes
+        self.assertEqual((s.carried, s.score), (4, 30)); self.assertEqual(ev[-1][0], "refuel"); self.assertEqual(ev[-1][1]["amount"], 6)
+        self.assertEqual(ev[-1][1]["fuel"], 100.0)
+        go(s, 1, interact=False); s.lanterns[0]["fuel"] = 6001   # decay in stage 2 leaves it exactly full
+        ev = go(s, 1, interact=True)   # full lantern: not chosen, nothing happens
+        self.assertEqual((s.carried, s.score, [e[0] for e in ev]), (4, 30, []))
+        s2 = sim(player={"pos": [0, 0, 24], "carried": 2}, lanterns=[{"id": "L1", "lit": True, "fuel": 10.0}])
+        go(s2, 1, interact=True); self.assertEqual((s2.carried, s2.lanterns[0]["fuel"]), (0, 1799))   # 10 - 1/60 + 20 = 29.98
+
+    def test_interact_picks_nearest_receivable_lantern(self):
+        s = sim(player={"pos": [0, 0, 0], "carried": 10}, lanterns=[{"id": "L1", "pos": [0, 0, 1], "lit": True, "fuel": 100.02},
+                {"id": "L2", "pos": [0, 0, 1.5]}, {"id": "L3", "pos": [0, 0, -1.5]}])
+        s.lanterns = s.lanterns[:3]
+        ev = go(s, 1, interact=True); self.assertEqual(ev[1], ("deposit", {"lantern_id": "L2", "amount": 10, "deposited": 10}))   # tie L2/L3 -> smaller id; full L1 skipped
+
+    def test_win_at_dawn_needs_ratio_and_scores(self):
+        lit = [{"id": f"L{i}", "lit": True, "fuel": 50.0} for i in (1, 2, 3)]
+        s = sim(time_left_s=1, lanterns=lit); ev = go(s, 60)
+        self.assertEqual(ev[-1], ("game_over", {"result": "won", "reason": "dawn_survived"}))
+        self.assertEqual(s.score, 3 * (50 + 49) + 3 * 50)   # fuel 50 - 1 s of decay = 49
+        s = sim(time_left_s=1, lanterns=lit[:2]); go(s, 60); self.assertEqual((s.state, s.score), ("lost", 0))
+        for n, need in ((1, 3), (2, 4), (3, 5)):
+            s = sim(n, time_left_s=1, lanterns=[{"id": f"L{i+1}", "lit": True} for i in range(need)]); go(s, 60); self.assertEqual(s.state, "won", n)
+            s = sim(n, time_left_s=1, lanterns=[{"id": f"L{i+1}", "lit": True} for i in range(need - 1)]); go(s, 60); self.assertEqual(s.state, "lost", n)
+
+    def test_no_flames_beats_dawn(self):
+        s = sim(time_left_s=1, player={"flames": 1}, lanterns=[{"id": f"L{i}", "lit": True} for i in (1, 2, 3)], shades=[{"id": "S1", "pos": [0.5, 0, 0]}])
+        ev = go(s, 60); self.assertEqual(ev[-1], ("game_over", {"result": "lost", "reason": "no_flames"}))
+
+    def test_capacity_grows_and_caps(self):
+        s = sim(player={"successful_lights": 3}); self.assertEqual(s.capacity(), 16)
+        self.assertEqual(sim(player={"successful_lights": 9}).capacity(), 20)
+        s = sim(player={"carried": 10}, motes=[[0, 0, 0.5]]); go(s, 1); self.assertEqual(s.carried, 10)
+        s = sim(player={"carried": 10, "successful_lights": 1}, motes=[[0, 0, 0.5]]); go(s, 1); self.assertEqual(s.carried, 11)
+
+    def test_weak_lantern_has_no_safe_zone(self):
+        s = sim(lanterns=[{"id": "L1", "pos": [0, 0, 20], "lit": True, "fuel": 30.0 + 2 / 60}], shades=[{"id": "S1", "pos": [0, 0, 18], "state": "chase"}])
+        go(s, 1); self.assertGreaterEqual(s.xz(s.shades[0]["pos"], [0, 0, 20]), 5.99)   # exactly 30 after the tick: still safe
+        go(s, 1); go(s, 1); self.assertLess(s.lanterns[0]["fuel"], 1800)
+        s.shades[0]["pos"] = [0.0, 0.0, 19.0]; go(s, 1); self.assertLess(s.xz(s.shades[0]["pos"], [0, 0, 20]), 5)   # fuel < 30: shade may enter
+
+    def test_wander_shade_goes_to_weak_lantern_then_drains(self):
+        s = sim(player={"pos": [0, 0, -30]}, lanterns=[{"id": "L1", "pos": [0, 0, 30], "lit": True, "fuel": 100}, {"id": "L2", "pos": [5, 0, 20], "lit": True, "fuel": 10}],
+                shades=[{"id": "S1", "pos": [5, 0, 25], "state": "wander"}])
+        go(s, 100); self.assertEqual(s.shades[0]["state"], "drain"); self.assertEqual(s.shades[0]["target"], "L2")   # nearest weak is L2 (L1 is full)
+        f = s.lanterns[1]["fuel"]; go(s, 60)
+        self.assertEqual(f - s.lanterns[1]["fuel"], 60 * 6)   # 1/s decay + 5/s drain
+        ev = go(s, 0); self.assertEqual(s.snapshot()["shades"][0]["target_lantern_id"], "L2")
+
+    def test_drain_event_every_60_ticks_and_stacking(self):
+        s = sim(player={"pos": [0, 0, -30]}, lanterns=[{"id": "L1", "pos": [0, 0, 30], "lit": True, "fuel": 20}],
+                shades=[{"id": "S1", "pos": [0, 0, 29], "state": "drain", "target_lantern_id": "L1"}, {"id": "S2", "pos": [1, 0, 30], "state": "drain", "target_lantern_id": "L1"}])
+        ev = go(s, 60); fd = [e for e in ev if e[0] == "fuel_drain"]
+        self.assertEqual([e[1]["shade_id"] for e in fd], ["S1", "S2"]); self.assertEqual(s.lanterns[0]["fuel"], 20 * 60 - 60 * 11)   # 11 units/s with two shades
+        go(s, 130); self.assertEqual(s.shades[0]["state"], "wander"); self.assertFalse(s.lanterns[0]["lit"])   # lantern out -> back to wander
+
+    def test_drain_exits(self):
+        base = dict(player={"pos": [0, 0, -30], "carried": 10}, lanterns=[{"id": "L1", "pos": [0, 0, 30], "lit": True, "fuel": 20}])
+        d = lambda **k: [{"id": "S1", "pos": [0, 0, 29], "state": "drain", "target_lantern_id": "L1", **k}]
+        s = sim(**base, shades=d()); s.pos = [0.0, 0.0, 25.0]; go(s, 1); self.assertEqual(s.shades[0]["state"], "chase")   # Mây within 6 m
+        s = sim(**base, shades=d()); s.pos = [0.0, 0.0, 28.0]; go(s, 1, pulse=True)   # 3 pulse cost, stuns the drainer: +15
+        self.assertEqual((s.shades[0]["state"], s.score), ("stunned", 15))
+        s = sim(**base, shades=[{"id": "S1", "pos": [0, 0, 26], "state": "drain", "target_lantern_id": "L1"}]); go(s, 1)
+        self.assertEqual(s.shades[0]["state"], "wander")   # > 2 m from the lantern
+        base["lanterns"][0]["fuel"] = 100; s = sim(**base, shades=d(state="stunned", state_ticks_left=1)); go(s, 1); self.assertEqual(s.shades[0]["state"], "wander")   # stun ends -> wander
+
+    def test_refuel_to_30_pushes_shades_and_stops_drain(self):
+        s = sim(player={"pos": [0, 0, 28], "carried": 10}, lanterns=[{"id": "L1", "pos": [0, 0, 30], "lit": True, "fuel": 20}],
+                shades=[{"id": "S1", "pos": [0, 0, 32], "state": "drain", "target_lantern_id": "L1"}])
+        go(s, 1, interact=True); self.assertEqual(s.shades[0]["state"], "wander"); self.assertEqual(s.shades[0]["eject"], 29)
+        for _ in range(30): s.step()
+        self.assertAlmostEqual(s.xz(s.shades[0]["pos"], [0, 0, 30]), 6.0, places=2); self.assertEqual(s.flames, 3)
+
+    def test_v12_scenarios(self):
+        ev = events(run("refuel.json", None, ticks=1)); self.assertEqual(ev[-1][0], "night_start")
+        lines = run("refuel.json", "pick_and_light.inputs.json", ticks=1)   # no-op inputs: scenario loads with v1.2 fields
+        self.assertEqual(lines[0]["lanterns"][0]["fuel"], 45.0)
+        lines = run("drain.json", None, ticks=130); self.assertIn("fuel_drain", [e[0] for e in events(lines)])
+        lines = run("dawn_win.json", None, ticks=200); self.assertEqual(events(lines)[-1], ("game_over", {"result": "won", "reason": "dawn_survived"}))
+        self.assertEqual(lines[-1]["score"], (50 + 98) * 2 + (50 + 8) + 3 * 50)
+
+    def test_phase3_deterministic_full_night(self):
+        a, b = io.StringIO(), io.StringIO()
+        headless.run(5, 14400, None, [], 600, a, 1); headless.run(5, 14400, None, [], 600, b, 1)
+        self.assertEqual(a.getvalue(), b.getvalue()); self.assertIn('"reason"', a.getvalue()) if "game_over" in a.getvalue() else None
 
 if __name__ == "__main__":
     unittest.main()

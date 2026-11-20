@@ -2,9 +2,9 @@ import * as THREE from "three";
 import {cfg, save, chime, SFX, sfxEnd, music, resumeAudio} from "./audio.js";
 const C = {sky:0x0E1430, fog:0x1B2350, grass:0x2F5D50, sand:0xC9B48A, wood:0x6B4A2F, sea:0x12384A, lamp:0xFFB347, core:0xFFE9B0, off:0x5B5F6E,
   mote:0xFFF6C2, halo:0xFFE58A, shade:0x120A1A, rim:0x7A3CFF, stun:0x3A3450, shirt:0xE8E2D0, scarf:0xC8102E, gold:0xF2C14E, drifter:0x8FA3B8};
-const NIGHTS = [null, {name:"Đảo Bến", say:"Ông Đăng: «Thắp đủ năm ngọn đèn trước bình minh, cháu nhé.»"},
-  {name:"Đảo Cau", say:"Ông Đăng: «Cầu tre không lan can. Dùng bục nhảy mà sang đảo kia.»"},
-  {name:"Đảo Chuông", say:"Ông Đăng: «Gió mạnh lắm. Lên tháp chuông, thắp ngọn đèn cao nhất.»"}];
+const NIGHTS = [null, {name:"Đảo Bến", say:"Ông Đăng: «Giữ ít nhất 3 trong 5 ngọn đèn sáng tới bình minh, cháu nhé. Đèn cạn dầu thì châm thêm.»"},
+  {name:"Đảo Cau", say:"Ông Đăng: «Cầu tre không lan can. Dùng bục nhảy mà sang đảo kia. Giữ 4 trong 6 đèn sáng.»"},
+  {name:"Đảo Chuông", say:"Ông Đăng: «Gió mạnh lắm. Lên tháp chuông, giữ 5 trong 7 đèn sáng tới sáng.»"}];
 // ---- scene
 const scene = new THREE.Scene(); scene.background = new THREE.Color(C.sky); scene.fog = new THREE.FogExp2(C.fog, 0.012);
 const cam = new THREE.PerspectiveCamera(55, innerWidth/innerHeight, .1, 500);
@@ -41,9 +41,11 @@ function sync(pool, items, make, dy = 0) {
 }
 const moteGeo = new THREE.SphereGeometry(.22,8,8), haloGeo = new THREE.SphereGeometry(.5,8,8), shadeGeo = new THREE.SphereGeometry(.9,12,12);
 const mkMote = () => { const g = new THREE.Group(); g.add(mesh(moteGeo, new THREE.MeshBasicMaterial({color:C.mote}))); g.add(mesh(haloGeo, new THREE.MeshBasicMaterial({color:C.halo, transparent:true, opacity:.25}))); return g; };
-const mkShade = () => mesh(shadeGeo, M(C.shade, {emissive:C.rim, emissiveIntensity:.5}));
+const mkShade = () => mesh(shadeGeo, M(C.shade, {emissive:cfg.cb ? 0x00B3FF : C.rim, emissiveIntensity:.5}));
 const mkLamp = () => { const g = new THREE.Group(); g.add(mesh(new THREE.CylinderGeometry(.2,.2,3,8), M(C.wood)).translateY(1.5));
-  const b = mesh(new THREE.SphereGeometry(.7,12,12), M(C.off)); b.position.y = 3.2; b.name = "bulb"; g.add(b); const pl = new THREE.PointLight(C.lamp, 0, 30); pl.position.y = 3.2; pl.name = "pl"; g.add(pl); return g; };
+  const b = mesh(new THREE.SphereGeometry(.7,12,12), M(C.off)); b.position.y = 3.2; b.name = "bulb"; g.add(b); const pl = new THREE.PointLight(C.lamp, 0, 30); pl.position.y = 3.2; pl.name = "pl"; g.add(pl);
+  const tear = mesh(new THREE.BoxGeometry(.5, .08, .1), M(0x222222)); tear.position.set(0, 3.3, .66); tear.rotation.z = .5; tear.name = "tear"; g.add(tear);   // paper tear on a dark lantern
+  const fb = mesh(new THREE.BoxGeometry(1.4, .12, .12), new THREE.MeshBasicMaterial({color:C.halo})); fb.position.y = 4.3; fb.name = "fuel"; g.add(fb); return g; };
 const mkDrifter = () => mesh(new THREE.BoxGeometry(.2, .1, 2.2), new THREE.MeshBasicMaterial({color:C.drifter}));
 const mkCharm = () => { const g = new THREE.Group(); g.add(mesh(new THREE.BoxGeometry(.7,.05,1), M(C.gold))); g.add(mesh(new THREE.BoxGeometry(.55,.08,.85), M(C.scarf))); return g; };
 // ---- state
@@ -60,35 +62,51 @@ const btn = (label, fn) => { const b = document.createElement("button"); b.textC
 function show(html, buttons = []) { overlay(html); buttons.forEach(b => $("ovc").append(btn(...b))); }
 function menu() { mode = "menu"; music.on = false; total = 0; show("<h1>Đảo Đèn Lồng</h1><p>Ba Đêm, ba hòn đảo.</p>", [["Bắt đầu", () => intro(1)], ["Cài đặt", () => settings(menu)]]); }
 function intro(n) { night = n; mode = "intro"; show(`<h1>Đêm ${n}: ${NIGHTS[n].name}</h1><p>${NIGHTS[n].say}</p>`, [["Vào đêm", () => start(n)]]); }
-async function start(n) { const r = await post("/reset", {night:n}); build(r.layout); draw(r.snap); mode = "play"; music.on = true; lastSec = 99; overlay(""); resumeAudio(); }
-function settings(back) { show(`<h1>Cài đặt</h1><label>Âm lượng <input id=v type=range min=0 max=1 step=.05 value=${cfg.vol}></label><label>Độ nhạy chuột <input id=s type=range min=.1 max=1.5 step=.05 value=${cfg.sens}></label>`, [["Xong", back]]);
-  $("v").oninput = e => { cfg.vol = +e.target.value; save(); }; $("s").oninput = e => { cfg.sens = +e.target.value; save(); }; }
+async function start(n) { const r = await post("/reset", {night:n, easy:cfg.easy}); build(r.layout); draw(r.snap); mode = "play"; music.on = true; lastSec = 99; overlay(""); resumeAudio(); }
+function settings(back) { show(`<h1>Cài đặt</h1><label>Âm lượng <input id=v type=range min=0 max=1 step=.05 value=${cfg.vol}></label><label>Độ nhạy chuột <input id=s type=range min=.1 max=1.5 step=.05 value=${cfg.sens}></label><label><input id=cb type=checkbox ${cfg.cb ? "checked" : ""}> Bảng màu dễ phân biệt</label><label><input id=ez type=checkbox ${cfg.easy ? "checked" : ""}> Chế độ dễ (đêm ngắn, 5 Ngọn Lửa, Bóng hút yếu hơn)</label>`, [["Xong", back]]);
+  $("v").oninput = e => { cfg.vol = +e.target.value; save(); }; $("s").oninput = e => { cfg.sens = +e.target.value; save(); };
+  $("cb").onchange = e => { cfg.cb = e.target.checked; save(); palette(); }; $("ez").onchange = e => { cfg.easy = e.target.checked; save(); }; }
 async function togglePause() { if (mode !== "play" && mode !== "pause") return; await send({pause:true}, 1); await send({pause:false}, 1); }
 function pauseMenu() { show("<h1>Tạm dừng</h1>", [["Tiếp tục", togglePause], ["Chơi lại Đêm", () => start(night)], ["Cài đặt", () => settings(pauseMenu)], ["Về menu", menu]]); }
 function finish(s) {
   mode = "end"; music.on = false;
   if (s.state === "won") { total += s.score; night < 3 ? show(`<h1>Đêm ${night} xong!</h1><p>Điểm đêm: ${s.score} · Tổng: ${total}</p>`, [["Đêm kế tiếp", () => intro(night + 1)]])
-    : show(`<h1>Bình Minh</h1><p>Cả ba đảo đã sáng đèn.</p><p>Tổng điểm: ${total}</p>`, [["Về menu", menu]]); }
-  else show(`<h1>Thất bại</h1><p>${s.player.flames <= 0 ? "Hết Ngọn Lửa" : "Trời đã sáng"}</p>`, [["Chơi lại Đêm", () => start(night)], ["Về menu", menu]]);
+    : show(`<h1>Bình Minh</h1><p>Cả ba đảo còn sáng tới bình minh.</p><p>Tổng điểm: ${total}</p>`, [["Về menu", menu]]); }
+  else show(`<h1>Thất bại</h1><p>${s.player.flames <= 0 ? "Hết Ngọn Lửa" : "Trời sáng mà đảo chưa đủ đèn"}</p>`, [["Chơi lại Đêm", () => start(night)], ["Về menu", menu]]);
 }
 // ---- draw
+const warnCol = () => cfg.cb ? "#FFFFFF" : "#FF5A5F";
+function palette() { document.documentElement.style.setProperty("--danger", warnCol()); document.documentElement.classList.toggle("cb", !!cfg.cb); }
+palette();
+const beams = {};
 function draw(s) {
   snap = s; const p = s.player;
   player.position.set(...p.pos); player.rotation.y = Math.atan2(p.facing[0], p.facing[1]);
   player.children[0].material.color.set(p.invuln && (s.tick >> 2) % 2 ? 0xffffff : C.shirt);
   sync(pools.m, s.motes, mkMote, .8); sync(pools.s, s.shades, mkShade, .9); sync(pools.l, s.lanterns, mkLamp); sync(pools.d, s.drifters, mkDrifter); sync(pools.c, s.charms.filter(c => c.available), mkCharm, .8);
   s.shades.forEach(h => { const m = pools.s[h.id]; m.material.color.set(h.state === "stunned" ? C.stun : C.shade); m.material.emissiveIntensity = h.state === "stunned" ? 0 : .5; m.scale.setScalar(h.state === "spawning" ? .4 : 1); });
-  s.lanterns.forEach(l => { const g = pools.l[l.id], b = g.getObjectByName("bulb"); b.material.color.set(l.lit ? C.core : C.off); b.material.emissive.set(l.lit ? C.lamp : 0); g.getObjectByName("pl").intensity = l.lit ? 200 : 0; });
-  const lit = s.lanterns.filter(l => l.lit).length, n = s.lanterns.length;
+  const blink = (performance.now() % 1000) < 500;   // low fuel: 1 Hz flicker
+  s.lanterns.forEach(l => { const g = pools.l[l.id], b = g.getObjectByName("bulb"), low = l.lit && l.fuel < 30, on = l.lit && !(low && !blink);
+    b.material.color.set(on ? C.core : C.off); b.material.emissive.set(on ? C.lamp : 0); b.scale.set(1, l.lit ? 1 : .8, 1);
+    g.getObjectByName("pl").intensity = on ? 200 * (.4 + .6 * l.fuel / 100) : 0; g.getObjectByName("tear").visible = !l.lit;
+    const fb = g.getObjectByName("fuel"); fb.visible = l.lit && !(low && !blink); fb.scale.x = Math.max(.01, l.fuel / 100); fb.material.color.set(low ? new THREE.Color(warnCol()) : C.halo); });
+  s.shades.forEach(h => { const m = pools.s[h.id]; m.material.emissive.set(cfg.cb ? 0x00B3FF : C.rim); });
+  for (const id in beams) if (!s.shades.some(h => h.id === id && h.state === "drain")) { scene.remove(beams[id]); delete beams[id]; }
+  s.shades.filter(h => h.state === "drain").forEach(h => { const l = s.lanterns.find(q => q.id === h.target_lantern_id); if (!l) return;
+    const pts = [new THREE.Vector3(...h.pos).setY(h.pos[1] + .9), new THREE.Vector3(...l.pos).setY(l.pos[1] + 3.2)];
+    if (!beams[h.id]) { beams[h.id] = new THREE.Line(new THREE.BufferGeometry(), new THREE.LineBasicMaterial({color:cfg.cb ? 0x00B3FF : C.rim})); scene.add(beams[h.id]); }
+    beams[h.id].geometry.setFromPoints(pts); });
+  const lit = s.lanterns.filter(l => l.lit).length, n = s.lanterns.length, need = Math.ceil(.6 * n - 1e-9);
   amb.intensity = .15 + .55 * (lit / n);
   $("flames").textContent = "🔥".repeat(Math.max(0, p.flames));
   const t = Math.ceil(s.time_left_s); $("clock").textContent = `${String(Math.floor(t/60)).padStart(2,"0")}:${String(t%60).padStart(2,"0")}`; $("clock").className = s.time_left_s <= 30 ? "low" : "";
   if (t <= 10 && t < lastSec && s.state === "playing") SFX.tick(); lastSec = t;
-  $("score").innerHTML = `Đèn ${lit}/${n}<br>Điểm ${s.score}`;
-  $("bar").innerHTML = Array.from({length:10}, (_, i) => `<i class="${i < p.carried ? "on" : ""}"></i>`).join("");
+  $("score").innerHTML = `<span class="${lit < need ? "warn" : ""}">${lit < need ? "⚠ " : ""}Đèn ${lit}/${n} (cần ${need})</span><br>Điểm ${s.score}`;
+  $("bar").innerHTML = `<span>${p.carried}/${p.capacity}</span>` + Array.from({length:p.capacity}, (_, i) => `<i class="${i < p.carried ? "on" : ""}"></i>`).join("");
   $("cds").innerHTML = `<b class="${p.dash_cd_s > 0 ? "cd" : ""}">Shift · Lướt${p.dash_cd_s > 0 ? " " + p.dash_cd_s.toFixed(1) : ""}</b><b class="${p.pulse_cd_s > 0 || p.carried < 3 ? "cd" : ""}">Q · Tỏa Sáng ${p.pulse_cd_s > 0 ? p.pulse_cd_s.toFixed(1) : "(3)"}</b>`;
-  const near = s.lanterns.filter(l => !l.lit).map(l => ({l, d: Math.hypot(l.pos[0]-p.pos[0], l.pos[2]-p.pos[2])})).sort((a, b) => a.d - b.d)[0];
-  $("prompt").textContent = near && near.d <= 2 ? `E — Nạp ánh sáng (${near.l.deposited}/10)` : "";
+  const near = s.lanterns.filter(l => !l.lit || l.fuel < 100).map(l => ({l, d: Math.hypot(l.pos[0]-p.pos[0], l.pos[2]-p.pos[2])})).sort((a, b) => a.d - b.d)[0];
+  $("prompt").textContent = near && near.d <= 2 ? (near.l.lit ? `E — Châm dầu (${near.l.fuel.toFixed(0)}/100)` : `E — Nạp ánh sáng (${near.l.deposited}/${near.l.ever_lit ? 5 : 10})`) : "";
+  const weak = s.lanterns.filter(l => l.lit && l.fuel < 30).length; $("fuel").innerHTML = weak ? `<span class="warn">⚠ ${weak} đèn sắp cạn dầu</span>` : "";
   $("note").textContent = s.wind.warning ? "🍃 Gió sắp nổi!" : s.wind.active ? "🍃 Gió mạnh" : p.charm_s > 0 ? `Bùa Gió ${Math.ceil(p.charm_s)}s` : "";
   const ar = $("arrow"); ar.style.display = "none";
   if (near) { const v = new THREE.Vector3(...near.l.pos).setY(near.l.pos[1] + 3).project(cam), off = v.z > 1 || Math.abs(v.x) > .95 || Math.abs(v.y) > .95;

@@ -1,5 +1,5 @@
 // Settings (saved in localStorage) and synthesized audio. Client only: never touches the sim.
-export const cfg = {vol:.6, sens:.5};
+export const cfg = {vol:.6, sens:.5, easy:false, cb:false};
 try { Object.assign(cfg, JSON.parse(localStorage.getItem("ddl") || "{}")); } catch(e) {}
 export const save = () => { try { localStorage.setItem("ddl", JSON.stringify(cfg)); } catch(e) {} };
 // ---- audio (WebAudio synth; client only)
@@ -12,7 +12,8 @@ const PENT = [0,2,4,7,9];
 export const chime = n => tone(392 * 2 ** (PENT[n % 5] / 12 + Math.floor(n / 5)), 1.2, "sine", .3);   // creative: each lit lantern rings one step higher
 export const SFX = {mote_picked:()=>tone(880,.1,"triangle",.15,1320), pulse:()=>tone(300,.5,"sine",.3,900), player_hit:()=>tone(160,.4,"sawtooth",.25,60),
   dash:()=>tone(500,.15,"square",.08,200), shade_spawned:()=>tone(90,.6,"sawtooth",.12,60), jump:()=>tone(330,.15,"triangle",.12,520),
-  charm_picked:()=>tone(660,.3,"triangle",.2,1320), drifter_steal:()=>tone(240,.3,"square",.12,120), tick:()=>tone(1000,.06,"square",.08)};
+  charm_picked:()=>tone(660,.3,"triangle",.2,1320), drifter_steal:()=>tone(240,.3,"square",.12,120), tick:()=>tone(1000,.06,"square",.08),
+  lantern_out:()=>tone(392,1.4,"sine",.3,196), refuel:()=>tone(660,.2,"triangle",.15,880)}   // creative: a dying lantern rings the chime backwards;
 setInterval(() => { if (music.on) tone(130.8 * 2 ** (PENT[Math.floor(Math.random()*5)] / 12), 3, "sine", .09); }, 2200);
 
 export const sfxEnd = res => res === "won"

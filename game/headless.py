@@ -1,4 +1,4 @@
-"""Headless runner per Test Contract v1.1. Usage: python3 -m game.headless --seed 1 --night 1 --ticks 600 --out out.jsonl"""
+"""Headless runner per Test Contract v1.2. Usage: python3 -m game.headless --seed 1 --night 1 --ticks 600 --out out.jsonl"""
 import argparse, json, sys
 from .sim import Sim, ScenarioError
 

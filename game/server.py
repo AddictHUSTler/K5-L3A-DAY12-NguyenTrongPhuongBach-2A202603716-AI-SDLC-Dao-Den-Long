@@ -1,14 +1,21 @@
 """Play locally: python3 -m game.server  ->  http://localhost:8000  (sim runs here, browser only draws)."""
 import json, os, random, sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from .sim import Sim
+from .sim import Sim, load_tuning
 
 WEB = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "web")
 sim = Sim(random.randrange(1 << 30))
 
 
-def new(night):
-    return Sim(random.randrange(1 << 30), night=night if night in (1, 2, 3) else 1)
+EASY_S = {1: 150, 2: 170, 3: 190}   # browser-only assist: shorter night, 5 flames, weaker drain. Headless/contract numbers are untouched.
+
+
+def new(night, easy=False):
+    night = night if night in (1, 2, 3) else 1
+    if not easy:
+        return Sim(random.randrange(1 << 30), night=night)
+    T = dict(load_tuning(), flames=5, drain_per_s=2)
+    return Sim(random.randrange(1 << 30), {"time_left_s": EASY_S[night]}, tuning=T, night=night)
 
 
 class H(BaseHTTPRequestHandler):
@@ -34,7 +41,7 @@ class H(BaseHTTPRequestHandler):
         global sim
         body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))) or b"{}")
         if self.path == "/reset":
-            sim = new(int(body.get("night", 1)))
+            sim = new(int(body.get("night", 1)), bool(body.get("easy")))
             return self.send(json.dumps({"snap": sim.snapshot(), "events": [], "layout": sim.layout()}).encode())
         # /step: {inputs, steps}
         sim.set_inputs(body.get("inputs", {}))

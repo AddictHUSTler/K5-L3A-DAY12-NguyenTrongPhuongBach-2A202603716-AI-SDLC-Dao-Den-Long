@@ -7,10 +7,10 @@
 ```bash
 python3 -m game.server          # then open http://localhost:8000 (needs internet for three.js from unpkg)
 ./scripts/test.sh               # all tests
-python3 -m game.headless --seed 1 --night 2 --ticks 600 --out out.jsonl   # headless (Test Contract v1.1)
+python3 -m game.headless --seed 1 --night 2 --ticks 600 --out out.jsonl   # headless (Test Contract v1.2)
 ```
 Controls: WASD move, Space jump, Shift dash, E deposit light into a lantern, Q pulse (3 light), mouse (click to lock) or arrows rotate camera, Esc/P pause.
-Three nights: Đảo Bến, Đảo Cau, Đảo Chuông. Scoring (+10 per light deposited, +100 per lantern, +5 per Shade pulsed, win bonus) and every number: `game.contract.json`. Spec + acceptance criteria: `docs/spec-phase2.md`. Assumptions: `docs/notes/assumptions.md`. Evidence: `docs/proof/`.
+Three nights: Đảo Bến, Đảo Cau, Đảo Chuông. Goal: keep enough lanterns lit until dawn (3/5, 4/6, 5/7); lanterns burn fuel, press E on a lit lantern to refuel it. Every number: `game.contract.json`. Spec: `docs/spec-phase3.md`, design decision: `docs/notes/adr-001-lantern-fuel.md`, breaking changes: `docs/CHANGELOG.md`. Assumptions: `docs/notes/assumptions.md`. Evidence: `docs/proof/`.
 
 ## Code map (where to look when something breaks)
 | Problem | File |
@@ -131,3 +131,5 @@ Không commit API key, token hay `.env`. Gửi link repo theo hướng dẫn c�
 - Dùng AI thoải mái; không sao chép repo của người khác.
 - Bằng chứng phải thật: test luôn đạt hay output sửa tay là vi phạm.
 - Nhân vật, bối cảnh là bản gốc của lab; asset bên ngoài chỉ dùng loại CC0/CC-BY/MIT hoặc tự tạo, ghi nguồn trong `CREDITS.md`.
+
+**Kept + extended in Phase 3:** the chime now has a mirror: when a lantern runs dry it rings the same note falling (`lantern_out` event, browser only). Also a purple beam shows which lantern a Shade is draining, and an optional "Chế độ dễ" setting (shorter nights, 5 flames, weaker drain) lives only in `game/server.py`. Headless output is unchanged by all three.

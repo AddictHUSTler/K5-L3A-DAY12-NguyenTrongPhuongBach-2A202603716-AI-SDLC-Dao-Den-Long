@@ -30,3 +30,27 @@ Ticket numbers replace every Phase 1 number (all in `game.contract.json`; maps t
 - Wind direction is picked when the warning starts. `wind_enabled` defaults to true on night 3 only; `random_drifters` to true on nights 2-3.
 - Totals across nights are kept by the browser client (a headless run is one night).
 - Not verified: browser rendering/FPS (no browser available in this session) and the hidden instructor scenarios.
+
+## Phase 3 (contract v1.2): replaced rules, old -> new, why
+| Old (Phase 1-2) | New (Ticket-03) | Test changed |
+|---|---|---|
+| Lit lantern takes no more motes; stays lit | Lit lantern has fuel (0-100), decays 1/s, can be refuelled, goes out at 0 | new `test_fuel_*`, `test_refuel_*` |
+| Light cost 10 always | 10 first time, 5 relight (`ever_lit`) | `test_out_at_zero_then_relight_costs_5` |
+| Win when all lit (`all_lit`) | Win at dawn with >= ceil(0.6 x lanterns) lit (`dawn_survived`) | `test_win_when_all_lit` replaced by `test_lighting_all_does_not_end_night` + `test_win_at_dawn_*` (old rule is gone, not skipped) |
+| Nights 300/330/360 s | 240/270/300 s | `test_standard_numbers`, `test_night_maps` updated |
+| Carry 10 | 10 + 2 per successful light, max 20 | `test_capacity_grows_and_caps` |
+| Score: 10/mote, 100/lantern, time + flame bonus | 5/mote, 100 first light, 40 relight, 5 stun (15 if draining), dawn 50 + fuel per lit lantern, 50 per flame | none asserted score before; new tests assert the new numbers |
+| Lit lanterns always repel Shades | Only lit with fuel >= 30 repel | `test_weak_lantern_has_no_safe_zone` |
+| Stun end -> chase | Stun end -> wander (then chase if Mây within 12 m) | none |
+Kept as is: all other Phase 1-2 tests pass unchanged except `lantern_lit` now carries `relight`.
+
+Assumptions made in Phase 3:
+- Fuel is stored as integer 1/60 units (`FUEL_UNIT`); decay = `round(fuel_decay_per_s)` units per tick, drain = `round(drain_per_s)`. Fractional per-second values are not supported (rounded). Output fuel is rounded to 1 decimal.
+- Fuel decay/drain runs in stage 2 and a lantern lit in stage 5 of a tick first loses fuel on the next tick. So a lantern you just topped up to 100 reads 99.98 next tick and can take 1 more mote; "full" means fuel = 100 exactly at interaction time.
+- Unlit lantern scenarios: `fuel` is ignored (0). `lit: true` without `fuel` -> 100. `lit` also sets `ever_lit`.
+- Wander goal: nearest weak lit lantern (fuel < 30) else the nearest unlit lantern (ticket: "như trước"; Phase 2 only had random wander, so this is new), walking at `shade_wander_speed`. With no unlit and no weak lanterns: random wander as before. Drain starts only for weak lanterns, within 2 m. A shade next to an unlit lantern just waits there.
+- Drain shades never hit Mây (Phase 2 hit rule only lists chase/wander). Drain -> chase has priority over nothing but the wander exits (lantern out / fuel >= 30 / > 2 m) which are checked first.
+- `fuel_drain` is emitted every 60 ticks of continuous draining per shade (counter resets on leaving drain).
+- Extra tuning keys (not in the ticket): `capacity_per_light` 2, `drain_reach_m` 2, `drain_detect_m` 6, score keys `relight`, `stun_drain`, `dawn_lantern`, `dawn_flame`. Removed: `per_second_left`, `per_flame_left`.
+- Total lanterns for the 60% rule = lanterns in the sim (scenario-added ones count).
+- Browser "Chế độ dễ" (saved setting) is an assist applied only in `game/server.py` (150/170/190 s, 5 flames, drain 2/s). Headless and contract numbers are untouched.
