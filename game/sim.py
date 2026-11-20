@@ -560,15 +560,17 @@ class Sim:
     def _move_shades(self):
         speed = self.T["shade_speed_night3"] if self.night == 3 else self.T["shade_speed"]
         lit = [l for l in self.lanterns if self._safe(l)]
+        weak = [l for l in self.lanterns if l["lit"] and not self._safe(l)]      # same for every Shade this tick: fuel only changes in stage 2
+        goals = weak or [l for l in self.lanterns if not l["lit"]]
         for s in self.shades:
-            self._shade_ai(s, speed)
+            self._shade_ai(s, speed, weak, goals)
             if s["eject"] <= 0:
                 self._keep_out_of_safe_zones(s, lit)
             h = self.terrain.height(s["pos"][0], s["pos"][2])
             if h is not None:
                 s["pos"][1] = h
 
-    def _shade_ai(self, s, speed):
+    def _shade_ai(self, s, speed, weak, goals):
         """One tick of shade behaviour by state. States: spawning -> wander <-> chase; recoil/stunned from hits and pulses."""
         T = self.T
         px, pz = self.pos[0] - s["pos"][0], self.pos[2] - s["pos"][2]
@@ -600,7 +602,7 @@ class Sim:
             if st == "chase" and d > 1e-9:
                 k = min(speed * DT, d)
                 self._shade_move(s, px / d * k, pz / d * k)
-            elif st == "wander" and self._seek_lantern(s):
+            elif st == "wander" and self._seek_lantern(s, weak, goals):
                 pass
             elif st == "wander":
                 if s["turn"] <= 0:
@@ -619,11 +621,9 @@ class Sim:
         elif d <= T["drain_detect_m"]:
             s["state"], s["drain_t"] = "chase", 0
 
-    def _seek_lantern(self, s):
+    def _seek_lantern(self, s, weak, pool):
         """Wander goal: nearest lit lantern with fuel < threshold (ties: smaller id), else the nearest unlit one. Starts draining within reach."""
-        T, w = self.T, self.lanterns
-        weak = [l for l in w if l["lit"] and not self._safe(l)]
-        pool = weak or [l for l in w if not l["lit"]]
+        T = self.T
         if not pool:
             return False
         l = min(pool, key=lambda q: (self.xz(q["pos"], s["pos"]), q["id"]))
