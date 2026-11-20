@@ -1,0 +1,12 @@
+{
+ "contract_version": "1.3",
+ "avg_fps": 223.5,
+ "p1_low_fps": 5.9,
+ "frame_ms_p95": 8.9,
+ "frames": 6718,
+ "load_ms": 2838,
+ "peak_mem_mb": 1133,
+ "vsync_off": true,
+ "renderer": "ANGLE (Intel, Mesa Intel(R) Graphics (ADL GT2), OpenGL 4.6) via three.js r160 WebGL; Brave Origin 158.1.100.58",
+ "os": "Linux 7.0.0-43-generic x86_64"
+}
