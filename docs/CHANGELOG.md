@@ -7,4 +7,4 @@
 - Carry capacity 10 -> up to 20 (`player.capacity`).
 - Score formula replaced; no time bonus.
 - Snapshot adds `fuel`, `ever_lit`, `relit_count` (lanterns), `capacity` (player), `target_lantern_id` (shades). `lantern_lit` adds `relight`. Scenarios add `fuel`, `ever_lit`, `successful_lights`, `target_lantern_id`.
-- Browser: fuel bars, low-fuel flicker, colour-blind palette, easy mode, lantern-out sound.
+- Browser: fuel bars, low-fuel flicker, colour-blind palette, easier/faster browser tuning, lantern-out sound.

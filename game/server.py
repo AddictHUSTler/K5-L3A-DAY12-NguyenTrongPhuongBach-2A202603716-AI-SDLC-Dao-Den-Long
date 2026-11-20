@@ -7,15 +7,14 @@ WEB = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 
 sim = Sim(random.randrange(1 << 30))
 
 
-EASY_S = {1: 150, 2: 170, 3: 190}   # browser-only assist: shorter night, 5 flames, weaker drain, faster motes, later first Shade. Headless/contract numbers are untouched.
+# Browser play is tuned easier and faster than the contract numbers (headless/contract are untouched).
+PLAY_S = {1: 150, 2: 170, 3: 190}
+PLAY_T = dict(load_tuning(), flames=5, drain_per_s=2, mote_spawn_every_ticks=120, shade_first_tick=900)
 
 
-def new(night, easy=False):
+def new(night):
     night = night if night in (1, 2, 3) else 1
-    if not easy:
-        return Sim(random.randrange(1 << 30), night=night)
-    T = dict(load_tuning(), flames=5, drain_per_s=2, mote_spawn_every_ticks=120, shade_first_tick=900)
-    return Sim(random.randrange(1 << 30), {"time_left_s": EASY_S[night]}, tuning=T, night=night)
+    return Sim(random.randrange(1 << 30), {"time_left_s": PLAY_S[night]}, tuning=PLAY_T, night=night)
 
 
 class H(BaseHTTPRequestHandler):
@@ -41,7 +40,7 @@ class H(BaseHTTPRequestHandler):
         global sim
         body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))) or b"{}")
         if self.path == "/reset":
-            sim = new(int(body.get("night", 1)), bool(body.get("easy")))
+            sim = new(int(body.get("night", 1)))
             return self.send(json.dumps({"snap": sim.snapshot(), "events": [], "layout": sim.layout()}).encode())
         # /step: {inputs, steps}
         sim.set_inputs(body.get("inputs", {}))
