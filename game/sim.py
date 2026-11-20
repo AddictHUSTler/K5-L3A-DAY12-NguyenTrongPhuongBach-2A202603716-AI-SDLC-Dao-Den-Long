@@ -1,6 +1,7 @@
 """Pure game logic for Đảo Đèn Lồng, Test Contract v1.1. No I/O, no rendering, no wall-clock.
 Deterministic per seed. All numbers and maps come from game.contract.json."""
 import json, math, os
+from .world import Terrain, ring_points
 
 DT = 1.0 / 60.0
 CONTRACT_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "game.contract.json")
@@ -50,15 +51,6 @@ def vec(v, name):
     return [float(x) for x in v]
 
 
-def ring_points(rings):
-    out = []
-    for g in rings:
-        for i in range(g["n"]):
-            a = math.radians(g["start"] + g["step"] * i)
-            out.append([g["c"][0] + g["r"] * math.cos(a), float(g["y"]), g["c"][1] + g["r"] * math.sin(a)])
-    return out
-
-
 class Sim:
     def __init__(self, seed=0, scenario=None, tuning=None, night=1, contract=None):
         con = contract or load_contract()
@@ -67,6 +59,7 @@ class Sim:
             raise ScenarioError("night must be 1, 2 or 3")
         self.night, self.M = night, con["maps"][str(night)]
         self.rnd = mulberry32(seed)
+        self.terrain = Terrain(self.M, self.T["step_up_m"])
         sc = scenario or {}
         if not isinstance(sc, dict):
             raise ScenarioError("scenario must be an object")
@@ -83,7 +76,7 @@ class Sim:
         self.vx = self.vz = self.vy = 0.0
         if "vel" in p:
             self.vx, self.vy, self.vz = vec(p["vel"], "player.vel")
-        h = self.height(self.pos[0], self.pos[2])
+        h = self.terrain.height(self.pos[0], self.pos[2])
         self.grounded = h is not None and abs(self.pos[1] - h) < 1e-6
         self.face = (0.0, 1.0)
         self.flames = int(p.get("flames", T["flames"]))
@@ -138,39 +131,6 @@ class Sim:
         self.wind = {"active": False, "warn": False, "dir": 0.0, "next": ticks(T["wind_every_s"]), "end": 0}
         self.in_ = {"move": [0.0, 0.0], "cam_yaw_deg": 0.0, "jump": False, "interact": False, "pulse": False, "dash": False, "pause": False}
         self.prev = {k: False for k in ("jump", "interact", "pulse", "dash", "pause")}
-
-    # ---- terrain
-    def height(self, x, z):
-        """Ground height at (x, z), or None over the cloud sea."""
-        M, h = self.M, None
-        def up(v):
-            nonlocal h
-            h = v if h is None else max(h, v)
-        for d in M["discs"]:
-            if math.hypot(x - d["c"][0], z - d["c"][1]) <= d["r"]:
-                up(d["y"])
-        for r in M.get("rects", []):
-            if r["x0"] <= x <= r["x1"] and r["z0"] <= z <= r["z1"]:
-                up(r["y"])
-        for r in M.get("half_rings", []):
-            if z > 0 and r["r0"] <= math.hypot(x, z) <= r["r1"]:
-                up(r["y"])
-        for r in M.get("ramps", []):
-            a = math.radians(r["deg"])
-            s, lat = x * math.cos(a) + z * math.sin(a), -x * math.sin(a) + z * math.cos(a)
-            if r["r0"] <= s <= r["r1"] and abs(lat) <= r["w"] / 2:
-                up(r["y0"] + (r["y1"] - r["y0"]) * (s - r["r0"]) / (r["r1"] - r["r0"]))
-        return h
-
-    def in_tower(self, x, z, y):
-        t = self.M.get("tower")
-        return bool(t) and math.hypot(x, z) <= t["r"] and y < t["y"] + t["h"]
-
-    def walk_ok(self, x, z, feet):
-        if self.in_tower(x, z, feet):
-            return False
-        h = self.height(x, z)
-        return h is None or h <= feet + self.T["step_up_m"]
 
     def layout(self):
         return json.loads(json.dumps(self.M))
@@ -349,10 +309,10 @@ class Sim:
         # horizontal with wall / tower blocking
         x, y, z = self.pos
         nx, nz = x + self.vx * DT, z + self.vz * DT
-        if not self.walk_ok(nx, nz, y):
-            if self.walk_ok(nx, z, y):
+        if not self.terrain.walk_ok(nx, nz, y):
+            if self.terrain.walk_ok(nx, z, y):
                 nz, self.vz = z, 0.0
-            elif self.walk_ok(x, nz, y):
+            elif self.terrain.walk_ok(x, nz, y):
                 nx, self.vx = x, 0.0
             else:
                 nx, nz, self.vx, self.vz = x, z, 0.0, 0.0
@@ -376,12 +336,12 @@ class Sim:
             if self.wind["active"]:
                 a = math.radians(self.wind["dir"])
                 wx2, wz2 = self.pos[0] + math.cos(a) * T["wind_speed"] * DT, self.pos[2] + math.sin(a) * T["wind_speed"] * DT
-                if self.walk_ok(wx2, wz2, self.pos[1]):
+                if self.terrain.walk_ok(wx2, wz2, self.pos[1]):
                     self.pos[0], self.pos[2] = wx2, wz2
         # vertical
         x, z = self.pos[0], self.pos[2]
         if not dashing and self.grounded:
-            h = self.height(x, z)
+            h = self.terrain.height(x, z)
             if h is not None and self.pos[1] - h <= T["step_up_m"]:
                 self.pos[1] = h
             else:
@@ -389,7 +349,7 @@ class Sim:
         if not dashing and not self.grounded:
             self.vy -= T["gravity"] * DT
             self.pos[1] += self.vy * DT
-            h = self.height(x, z)
+            h = self.terrain.height(x, z)
             if h is not None and self.pos[1] <= h and self.vy <= 0:
                 self.pos[1], self.vy, self.grounded, self.launched = h, 0.0, True, False
         if self.pos[1] < T["fall_y"] and self.fall_wait == 0:
@@ -490,7 +450,7 @@ class Sim:
                     d["state"], d["left"] = "flee", T["drifter_flee_ticks"]
                 elif d["state"] == "flee" and d["stolen"] > 0:
                     for i in range(d["stolen"]):
-                        self._add_mote([d["pos"][0] + 0.3 * i, self.height(d["pos"][0], d["pos"][2]) or 0.0, d["pos"][2]], "dropped", T["mote_drop_ttl_ticks"], None)
+                        self._add_mote([d["pos"][0] + 0.3 * i, self.terrain.height(d["pos"][0], d["pos"][2]) or 0.0, d["pos"][2]], "dropped", T["mote_drop_ttl_ticks"], None)
                     ev("drifter_drop", {"drifter_id": d["id"], "amount": d["stolen"]})
                     d["stolen"], d["left"] = 0, min(d["left"], T["drifter_drop_vanish_ticks"])
         ev("pulse", {"stunned_ids": hit})
@@ -499,7 +459,7 @@ class Sim:
     def _shade_move(self, s, dx, dz):
         """Move a shade by (dx, dz) if the target has ground; slide along axes; return True if moved."""
         x, z = s["pos"][0], s["pos"][2]
-        ok = lambda a, b: self.height(a, b) is not None and not self.in_tower(a, b, 0.0)
+        ok = lambda a, b: self.terrain.height(a, b) is not None and not self.terrain.in_tower(a, b, 0.0)
         for ax, az in ((dx, dz), (dx, 0.0), (0.0, dz)):
             if (ax or az) and ok(x + ax, z + az):
                 s["pos"][0], s["pos"][2] = x + ax, z + az
@@ -553,7 +513,7 @@ class Sim:
                     if od < T["safe_radius"]:
                         ux, uz = (ox / od, oz / od) if od > 1e-9 else (1.0, 0.0)
                         s["pos"][0], s["pos"][2] = l["pos"][0] + ux * T["safe_radius"], l["pos"][2] + uz * T["safe_radius"]
-            h = self.height(s["pos"][0], s["pos"][2])
+            h = self.terrain.height(s["pos"][0], s["pos"][2])
             s["pos"][1] = h if h is not None else s["pos"][1]
 
     def _move_drifters(self):
@@ -586,7 +546,7 @@ class Sim:
                     a = self.rnd() * math.tau
                     d["dir"], d["turn"] = (math.cos(a), math.sin(a)), T["shade_wander_turn_ticks"]
                 d["turn"] -= 1
-                if self.height(d["pos"][0], d["pos"][2]) is None:   # drifted over the sea: turn back to the island
+                if self.terrain.height(d["pos"][0], d["pos"][2]) is None:   # drifted over the sea: turn back to the island
                     cx, cz = self.M["center"][0] - d["pos"][0], self.M["center"][1] - d["pos"][2]
                     cn = math.hypot(cx, cz) or 1.0
                     d["dir"] = (cx / cn, cz / cn)
@@ -615,7 +575,7 @@ class Sim:
                     a = (i + self.rnd() * 0.8) / max(n, 1) * math.tau
                     r = T["drop_ring_min"] + self.rnd() * (T["drop_ring_max"] - T["drop_ring_min"])
                     x, z = self.pos[0] + r * math.cos(a), self.pos[2] + r * math.sin(a)
-                    h = self.height(x, z)
+                    h = self.terrain.height(x, z)
                     self._add_mote([x, self.pos[1] if h is None else h, z], "dropped", T["mote_drop_ttl_ticks"], None)
                 self.flames -= 1
                 self.invuln = T["invuln_ticks"]
