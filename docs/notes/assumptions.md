@@ -54,3 +54,16 @@ Assumptions made in Phase 3:
 - Extra tuning keys (not in the ticket): `capacity_per_light` 2, `drain_reach_m` 2, `drain_detect_m` 6, score keys `relight`, `stun_drain`, `dawn_lantern`, `dawn_flame`. Removed: `per_second_left`, `per_flame_left`.
 - Total lanterns for the 60% rule = lanterns in the sim (scenario-added ones count).
 - Browser play (`game/server.py`, not headless) is permanently easier and faster: 150/170/190 s, 5 flames, no passive fuel decay (only Shades drain), drain 2/s, motes every 120 ticks, first Shade at tick 900. Playtest feedback; contract numbers still apply to headless.
+
+## Phase 4 (contract v1.3)
+- Contract: only `contract_version` 1.3 and the two new commands changed; no tuning number or rule changed. `test_v12_numbers` now asserts "1.3" (name kept; numbers are the v1.2 ones).
+- Bench camera: counter-clockwise seen from above is `(30 cos t, 15, -30 sin t)` (three.js: +x right, -z up on a top-down view). Time `t` runs from the first bench frame, warm-up included.
+- Bench scene: `game/bench.py`. Even spread = sunflower spiral over radius 38 (seed only rotates it). Bench tuning zeroes Shade hit and detect radius, pickup radius, fuel decay and drain, and the Night is 100000 s long, so only wandering runs. Wander still walks toward unlit lanterns (normal rule), so Shades slowly gather at L4/L5.
+- Bench uses uncapped frames via Chrome flags `--disable-gpu-vsync --disable-frame-rate-limit`. `vsync_off` is always written `true` because those flags are always passed; a browser may still ignore them (check `frame_ms_p95`).
+- `load_ms` = browser's first bench frame minus the moment `game.bench` started (includes browser start). `peak_mem_mb` = peak summed RSS of the browser process tree during the measured window (Linux `/proc` only; `null` elsewhere).
+- Soak: input directions are the 8 compass directions plus standing still, chosen from a seeded RNG every 30 ticks. `mem_start_mb` is taken once Night 1 is built; `mem_end_mb` after a fresh Night is built following the last one.
+- Soak results are mostly "lost": random input never refuels lanterns on purpose and Mây dies to Shades. That is expected for a stress test.
+- Leaderboard: name `[A-Za-z0-9_]{3,12}` (no diacritics, the bonus is not done). `seed` = the browser server's seed for the last Night played. Equal scores keep insertion order. `score` is the sum of Night scores of Nights won; a loss saves the total so far and `nights_won` = Nights won before it. File: `leaderboard.json` in the repo folder, or `$DDL_LEADERBOARD`. The server trusts the browser's score (local game).
+- Reduce motion: the game never had camera shake, so the option only removes the flashing (low-fuel blink, hit flash, HUD blink). No shake was added just to switch it off.
+- Cues: "Shade appears" = a 5 s caption plus an edge arrow when that Shade is off-screen. Wind warning, fuel < 30 and last 10 s are text on the HUD.
+- Not done: Vietnamese diacritics in names, screenshots/GIF and the demo video (no recording tools in the session), `bench.json` if no Chrome was available (see proof).

@@ -1,30 +1,48 @@
-# Đảo Đèn Lồng: my build
+# Đảo Đèn Lồng: my build (v1.0.0)
 
-**Demo video:** _(add link before final submission)_
+**Demo video:** _(add link before final submission: Release v1.0.0 or `docs/demo/demo.mp4`)_ · Screenshot/GIF: _(add)_
 
-3D lantern game. Logic is pure Python (stdlib only); the browser draws it.
+3D lantern game: Mây carries light to keep the island's lanterns burning until dawn while Bóng Mực drain them. Logic is pure Python (stdlib only); the browser draws it.
+
+**Requirements:** Python 3.12, any modern browser (WebGL). No install step, works offline. Benchmark also needs Chrome/Chromium.
 
 ```bash
-python3 -m game.server          # then open http://localhost:8000 (needs internet for three.js from unpkg)
-./scripts/test.sh               # all tests
-python3 -m game.headless --seed 1 --night 2 --ticks 600 --out out.jsonl   # headless (Test Contract v1.2)
+git clone <this repo> && cd <this repo>
+python3 -m game.server          # open http://localhost:8000
+./scripts/test.sh               # all tests (optional)
 ```
-Controls: WASD move, Space jump, Shift dash, E deposit light into a lantern, Q pulse (3 light), mouse (click to lock) or arrows rotate camera, Esc/P pause.
-Three nights: Đảo Bến, Đảo Cau, Đảo Chuông. Goal: keep enough lanterns lit until dawn (3/5, 4/6, 5/7); lanterns burn fuel, press E on a lit lantern to refuel it. Every number: `game.contract.json`. Spec: `docs/spec-phase3.md`, design decision: `docs/notes/adr-001-lantern-fuel.md`, breaking changes: `docs/CHANGELOG.md`. Assumptions: `docs/notes/assumptions.md`. Evidence: `docs/proof/`.
 
-## Code map (where to look when something breaks)
+## Controls (all rebindable in Settings, saved)
+WASD move · Space jump · Shift dash · E deposit light / refuel · Q pulse (3 light) · Esc pause · mouse or ←/→ rotate camera.
+Settings also has: colour-blind palette, reduce motion, large text (×1.25).
+Goal: keep 3/5, 4/6, 5/7 lanterns lit until dawn over three nights (Đảo Bến, Đảo Cau, Đảo Chuông). After a win or loss you can save your score to the local top-10 (menu: Bảng xếp hạng).
+
+## Headless, bench, soak (Test Contract v1.3)
+```bash
+python3 -m game.headless --seed 1 --night 2 --ticks 600 --out out.jsonl
+python3 -m game.bench --seed 42 --duration 30 --out bench.json   # opens Chrome at 1280x720, vsync flags off
+python3 -m game.soak  --seed 7  --nights 10 --out soak.json       # ~2 s
+python3 -m game.server --export-leaderboard out.json
+```
+Set `DDL_BROWSER=/path/to/chrome` if the browser is not found. The bench vsync flags are Chrome-only; a browser may still cap frames. Measured results and machine: `docs/proof/phase-4.md`.
+
+## Where things are
 | Problem | File |
 |---|---|
 | A number or map is wrong | `game.contract.json` (`tuning`, `maps`) |
 | Ground, walls, ramps, spawn points | `game/world.py` |
-| A rule (movement, pulse, shades, drifters, scoring, win/lose) | `game/sim.py`, one method per rule, stages numbered in tick order |
-| Headless input/output format | `game/headless.py` |
+| A rule (one method per rule, stages numbered in tick order) | `game/sim.py` |
+| Headless / bench / soak / leaderboard | `game/headless.py`, `game/bench.py`, `game/soak.py`, `game/leaderboard.py` |
 | Browser server | `game/server.py` |
-| Look, HUD, menus | `web/main.js`, `web/style.css`; sound and settings: `web/audio.js` |
-| Expected behaviour | `tests/test_sim.py`, `scenarios/`, `docs/spec-phase2.md` |
+| Look, HUD, menus, key rebinding | `web/main.js`, `web/style.css`, `web/audio.js` |
+| Tests, scenarios | `tests/test_sim.py`, `scenarios/` |
+Docs: `CHANGELOG.md`, `CREDITS.md`, `docs/notes/assumptions.md`, `docs/notes/retro.md`, `docs/notes/ai-log.md`, `docs/proof/`.
 
 ## Sáng tạo của tôi
 **Lantern chime.** Lighting a lantern rings a note; each lantern is one step higher on a pentatonic scale, so lighting them all plays a rising tune. Browser-only (`web/index.html`, driven by the existing `lantern_lit` event); `game/` is untouched, so headless output is identical (`test_deterministic`). Kept in Phase 2: it rings when a lantern is lit.
+
+**Phase 4:** the creative extras are browser-only and never touch `game/sim.py`, so headless, bench and soak are unaffected. In the bench scene no chime, drain beam or wind leaves appear (no lantern is lit or drained, no wind on Night 1).
+
 
 ---
 
