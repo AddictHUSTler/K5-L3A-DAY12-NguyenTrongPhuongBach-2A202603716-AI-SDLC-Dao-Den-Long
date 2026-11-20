@@ -213,7 +213,7 @@ class T(unittest.TestCase):
     # ---- Phase 3 (contract v1.2)
     def test_v12_numbers(self):
         from game.sim import load_contract
-        c = load_contract(); self.assertEqual(c["contract_version"], "1.2")
+        c = load_contract(); self.assertEqual(c["contract_version"], "1.3")   # bumped in Phase 4; numbers unchanged
         for k, v in dict(fuel_max=100, fuel_decay_per_s=1.0, fuel_per_mote=10, relight_cost=5, win_ratio=0.6, drain_per_s=5, low_fuel_threshold=30, capacity_max=20).items():
             self.assertEqual(c["tuning"][k], v, k)
 
@@ -317,6 +317,46 @@ class T(unittest.TestCase):
         a, b = io.StringIO(), io.StringIO()
         headless.run(5, 14400, None, [], 600, a, 1); headless.run(5, 14400, None, [], 600, b, 1)
         self.assertEqual(a.getvalue(), b.getvalue()); self.assertIn('"reason"', a.getvalue()) if "game_over" in a.getvalue() else None
+
+    # ---- Phase 4 (contract v1.3): leaderboard, soak, bench numbers
+    def test_leaderboard_rules(self):
+        from game import leaderboard as lb
+        path = os.path.join(tempfile.mkdtemp(), "lb.json")
+        for bad in ("ab", "x" * 13, "bad name", "Đèn_Lồng"):
+            with self.assertRaises(ValueError): lb.add(bad, 10, 1, 1, path)
+        for i in range(12): lb.add(f"p{i:02d}", 100 if i < 3 else i, 1, i, path, now=f"2026-01-01T00:00:{i:02d}+07:00")
+        top = lb.load(path)
+        self.assertEqual(len(top), 10)
+        self.assertEqual([e["name"] for e in top[:3]], ["p00", "p01", "p02"])          # equal score: earlier first
+        self.assertEqual([e["score"] for e in top], sorted((e["score"] for e in top), reverse=True))
+        out = os.path.join(os.path.dirname(path), "out.json"); lb.export(out, path)
+        self.assertEqual(json.load(open(out)), {"entries": top})
+        self.assertEqual(set(top[0]), {"name", "score", "nights_won", "achieved_at", "seed"})
+
+    def test_leaderboard_missing_file_is_empty(self):
+        from game import leaderboard as lb
+        self.assertEqual(lb.load(os.path.join(tempfile.mkdtemp(), "none.json")), [])
+
+    def test_soak_runs_and_is_deterministic(self):
+        from game import soak
+        a, b = soak.run(7, 3), soak.run(7, 3)
+        self.assertEqual((a["nights"], a["crashes"]), (3, 0)); self.assertEqual(a["results"], b["results"])
+        self.assertTrue(all(r in ("won", "lost") for r in a["results"]))
+
+    def test_bench_scene(self):
+        from game import bench
+        s = Sim(42, bench.scene(42), tuning=bench.tuning(), night=1)
+        self.assertEqual((len(s.shades), len(s.motes), [l["lit"] for l in s.lanterns]), (200, 100, [True, True, True, False, False]))
+        for _ in range(600): s.step()
+        n = s.snapshot()
+        self.assertEqual((len(n["shades"]), len(n["motes"]), n["player"]["flames"], n["player"]["pos"], n["state"]), (200, 100, 3, [0, 0, 0], "playing"))
+        self.assertEqual([l["fuel"] for l in n["lanterns"][:3]], [100.0] * 3)
+        self.assertTrue(all(h["state"] == "wander" for h in n["shades"]))
+
+    def test_bench_stats_formulas(self):
+        from game import bench
+        r = bench.stats([10.0] * 98 + [50.0, 30.0], 1500, None, "x")
+        self.assertEqual((r["frames"], r["avg_fps"], r["p1_low_fps"], r["frame_ms_p95"], r["peak_mem_mb"]), (100, 94.3, 20.0, 10.0, None))   # k=1: slowest frame 50 ms
 
 if __name__ == "__main__":
     unittest.main()

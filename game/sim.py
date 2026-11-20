@@ -1,4 +1,4 @@
-"""Pure game logic for Đảo Đèn Lồng, Test Contract v1.2. No I/O, no rendering, no wall-clock.
+"""Pure game logic for Đảo Đèn Lồng, Test Contract v1.3. No I/O, no rendering, no wall-clock.
 Deterministic per seed. All numbers and maps come from game.contract.json."""
 import json, math, os
 from .world import Terrain, ring_points, unit
